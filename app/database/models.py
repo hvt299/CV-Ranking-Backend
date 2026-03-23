@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 class JobDescriptionCreate(BaseModel):
     title: str = Field(..., example="Thực tập sinh React Native")
@@ -9,7 +9,7 @@ class JobDescriptionCreate(BaseModel):
 
 class JobDescriptionDB(JobDescriptionCreate):
     id: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now(timezone.utc))
 
 class CVCandidateCreate(BaseModel):
     filename: str
@@ -24,7 +24,7 @@ class CVCandidateCreate(BaseModel):
 
 class CVCandidateDB(CVCandidateCreate):
     id: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now(timezone.utc))
 
 class CVUpdate(BaseModel):
     status: Optional[str] = Field(None, example="interviewing")
@@ -38,7 +38,7 @@ class HRUserDB(BaseModel):
     id: str
     email: EmailStr
     hashed_password: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now(timezone.utc))
 
 class Token(BaseModel):
     access_token: str
