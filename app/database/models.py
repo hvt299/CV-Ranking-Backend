@@ -19,7 +19,13 @@ class CVCandidateCreate(BaseModel):
     skills: List[str] = []
     skill_count: int = 0
     raw_text: str = Field(exclude=True)
+    status: str = Field(default="new", example="new, reviewed, interviewing, rejected, hired")
+    notes: List[str] = Field(default_factory=list, description="Danh sách các ghi chú của HR")
 
 class CVCandidateDB(CVCandidateCreate):
     id: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class CVUpdate(BaseModel):
+    status: Optional[str] = Field(None, example="interviewing")
+    note: Optional[str] = Field(None, example="Ứng viên giao tiếp tiếng Anh khá tốt")
