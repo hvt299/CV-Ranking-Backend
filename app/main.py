@@ -87,6 +87,8 @@ from app.database.config import connect_to_mongo, close_mongo_connection, get_db
 from app.database.models import JobDescriptionCreate
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Body
 from fastapi.concurrency import run_in_threadpool
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 app = FastAPI(
     title="CV Ranking System API",
@@ -115,6 +117,20 @@ def score_cv(candidate_skills, required_skills):
         "matched_skills": list(matched),
         "missing_skills": list(required_set - candidate_set)
     }
+
+def calculate_nlp_similarity(cv_text: str, jd_text: str) -> float:
+    if not cv_text or not jd_text:
+        return 0.0
+
+    vectorizer = TfidfVectorizer(stop_words='english')
+
+    try:
+        tfidf_matrix = vectorizer.fit_transform([cv_text, jd_text])
+        similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+        return round(similarity * 100, 2)
+    except Exception as e:
+        print(f"Lỗi khi chạy TF-IDF: {e}")
+        return 0.0
 
 async def extract_text(file: UploadFile, content: bytes):
     if file.filename.endswith(".pdf"):
@@ -179,28 +195,40 @@ async def analyze_cv(file: UploadFile = File(...)):
 @app.post("/api/v1/cv/rank")
 async def rank_cv(
     file: UploadFile = File(...),
-    required_skills: str = Form(...)
+    required_skills: str = Form(...),
+    jd_description: str = Form("")
 ):
     if not file.filename.endswith((".pdf", ".docx")):
-        raise HTTPException(400, "Only PDF or DOCX allowed")
+        raise HTTPException(400, "Hệ thống chỉ hỗ trợ định dạng PDF hoặc DOCX")
 
     content = await file.read()
 
     if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(400, "File too large")
+        raise HTTPException(400, "Dung lượng file vượt quá 5MB giới hạn")
 
     text = await extract_text(file, content)
-
     extracted = analyze_cv_text(text)
 
     jd_skills = [s.strip().lower() for s in required_skills.split(",") if s.strip()]
+    skill_ranking = score_cv(extracted["skills"], jd_skills)
+    skill_score = skill_ranking["score"]
 
-    ranking = score_cv(extracted["skills"], jd_skills)
+    nlp_score = calculate_nlp_similarity(text, jd_description) if jd_description else 0.0
+
+    final_score = round((0.7 * skill_score) + (0.3 * nlp_score), 2)
 
     return {
         "filename": file.filename,
-        "candidate_skills": extracted["skills"],
-        "ranking": ranking
+        "scores": {
+            "final_score": final_score,
+            "skill_score": skill_score,
+            "nlp_score": nlp_score
+        },
+        "details": {
+            "candidate_skills": extracted["skills"],
+            "matched_skills": skill_ranking["matched_skills"],
+            "missing_skills": skill_ranking["missing_skills"]
+        }
     }
 
 @app.post("/api/v1/jobs", status_code=201)

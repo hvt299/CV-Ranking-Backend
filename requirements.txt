@@ -7,3 +7,4 @@ motor
 pydantic[email]
 dnspython
 python-dotenv
+scikit-learn
