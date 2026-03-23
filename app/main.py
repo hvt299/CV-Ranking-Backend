@@ -84,10 +84,12 @@ def analyze_cv_text(text: str) -> Dict:
     }
 
 from app.database.config import connect_to_mongo, close_mongo_connection, get_db
-from app.database.models import JobDescriptionCreate, CVUpdate
+from app.database.models import JobDescriptionCreate, CVUpdate, HRUserCreate, Token
+from app.auth import get_password_hash, verify_password, create_access_token, get_current_user
 from bson import ObjectId
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Body, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Body, Query, Depends, status
 from fastapi.concurrency import run_in_threadpool
+from fastapi.security import OAuth2PasswordRequestForm
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -148,6 +150,37 @@ def root():
 @app.get("/ping")
 def ping():
     return {"status": "ok"}
+
+@app.post("/api/v1/auth/register", status_code=201)
+async def register_hr(user: HRUserCreate = Body(...)):
+    db = get_db()
+    existing_user = await db["hr_users"].find_one({"email": user.email})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email này đã được đăng ký!")
+        
+    hashed_pw = get_password_hash(user.password)
+    new_user = {
+        "email": user.email,
+        "hashed_password": hashed_pw,
+        "created_at": datetime.utcnow()
+    }
+    await db["hr_users"].insert_one(new_user)
+    return {"status": "success", "message": "Tạo tài khoản HR thành công"}
+
+@app.post("/api/v1/auth/login", response_model=Token)
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+    db = get_db()
+    user = await db["hr_users"].find_one({"email": form_data.username})
+    
+    if not user or not verify_password(form_data.password, user["hashed_password"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Email hoặc mật khẩu không chính xác",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
+    access_token = create_access_token(data={"sub": user["email"]})
+    return {"access_token": access_token, "token_type": "bearer"}
 
 @app.on_event("startup")
 async def startup_db_client():
@@ -290,7 +323,8 @@ async def get_job_ranking(
     job_id: str,
     page: int = Query(1, ge=1, description="Số trang hiện tại (mặc định: 1)"),
     limit: int = Query(10, ge=1, le=50, description="Số CV mỗi trang (mặc định: 10, tối đa: 50)"),
-    min_score: float = Query(0.0, ge=0.0, le=100.0, description="Lọc CV có điểm lớn hơn hoặc bằng")
+    min_score: float = Query(0.0, ge=0.0, le=100.0, description="Lọc CV có điểm lớn hơn hoặc bằng"),
+    current_hr: str = Depends(get_current_user)
 ):
     db = get_db()
     

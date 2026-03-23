@@ -8,3 +8,6 @@ pydantic[email]
 dnspython
 python-dotenv
 scikit-learn
+PyJWT
+passlib[bcrypt]
+python-multipart

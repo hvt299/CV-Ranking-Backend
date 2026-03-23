@@ -29,3 +29,17 @@ class CVCandidateDB(CVCandidateCreate):
 class CVUpdate(BaseModel):
     status: Optional[str] = Field(None, example="interviewing")
     note: Optional[str] = Field(None, example="Ứng viên giao tiếp tiếng Anh khá tốt")
+
+class HRUserCreate(BaseModel):
+    email: EmailStr
+    password: str
+
+class HRUserDB(BaseModel):
+    id: str
+    email: EmailStr
+    hashed_password: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
