@@ -56,7 +56,8 @@ async def analyze_cv(file: UploadFile = File(...)):
 async def rank_cv(
     file: UploadFile = File(...),
     required_skills: str = Form(...),
-    jd_description: str = Form("")
+    jd_description: str = Form(""),
+    required_experience: float = Form(0.0)
 ):
     if not file.filename.endswith((".pdf", ".docx")):
         raise HTTPException(400, "Hệ thống chỉ hỗ trợ định dạng PDF hoặc DOCX")
@@ -75,16 +76,21 @@ async def rank_cv(
 
     nlp_score = calculate_nlp_similarity(text, jd_description) if jd_description else 0.0
 
-    final_score = round((0.7 * skill_score) + (0.3 * nlp_score), 2)
+    candidate_yoe = extracted.get("years_of_experience", 0.0)
+    yoe_score = 100.0 if candidate_yoe >= required_experience else (candidate_yoe / required_experience) * 100 if required_experience > 0 else 100.0
+
+    final_score = round((0.5 * skill_score) + (0.3 * nlp_score) + (0.2 * yoe_score), 2)
 
     return {
         "filename": file.filename,
         "scores": {
             "final_score": final_score,
             "skill_score": skill_score,
-            "nlp_score": nlp_score
+            "nlp_score": nlp_score,
+            "yoe_score": round(yoe_score, 2)
         },
         "details": {
+            "candidate_yoe": candidate_yoe,
             "candidate_skills": extracted["skills"],
             "matched_skills": skill_ranking["matched_skills"],
             "missing_skills": skill_ranking["missing_skills"]
@@ -112,6 +118,7 @@ async def upload_and_save_cv(file: UploadFile = File(...)):
         "github": extracted_info.get("github"),
         "skills": extracted_info.get("skills", []),
         "skill_count": extracted_info.get("skill_count", 0),
+        "years_of_experience": extracted_info.get("years_of_experience", 0.0),
         "raw_text": text,
         "created_at": datetime.now(timezone.utc)
     }

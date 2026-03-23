@@ -51,7 +51,10 @@ async def get_job_ranking(
         for cv in cvs:
             skill_ranking = score_cv(cv.get("skills", []), job.get("required_skills", []))
             nlp_score = calculate_nlp_similarity(cv.get("raw_text", ""), job.get("description", ""))
-            final_score = round((0.7 * skill_ranking["score"]) + (0.3 * nlp_score), 2)
+            req_yoe = job.get("required_experience", 0.0)
+            cand_yoe = cv.get("years_of_experience", 0.0)
+            yoe_score = 100.0 if cand_yoe >= req_yoe else (cand_yoe / req_yoe) * 100 if req_yoe > 0 else 100.0
+            final_score = round((0.5 * skill_ranking["score"]) + (0.3 * nlp_score) + (0.2 * yoe_score), 2)
             
             leaderboard.append({
                 "cv_id": str(cv["_id"]),
@@ -60,9 +63,11 @@ async def get_job_ranking(
                 "scores": {
                     "final_score": final_score,
                     "skill_score": skill_ranking["score"],
-                    "nlp_score": nlp_score
+                    "nlp_score": nlp_score,
+                    "yoe_score": round(yoe_score, 2)
                 },
-                "matched_skills": skill_ranking["matched_skills"]
+                "matched_skills": skill_ranking["matched_skills"],
+                "years_of_experience": cand_yoe
             })
 
         if min_score > 0:

@@ -86,15 +86,36 @@ def remove_duplicate_semantic(skills: list) -> list:
             filtered.append(skill)
     return filtered
 
+def extract_years_of_experience(text: str) -> float:
+    text_lower = text.lower()
+    
+    pattern1 = r"(\d+(?:\.\d+)?)\s*(?:\+)?\s*(?:năm|years?)\s*(?:kinh nghiệm|kinh nghiem|of experience|experience|exp)"
+    pattern2 = r"(?:kinh nghiệm|kinh nghiem|experience|exp).{0,20}?(\d+(?:\.\d+)?)\s*(?:năm|years?)"
+
+    yoe = 0.0
+    
+    for pattern in [pattern1, pattern2]:
+        matches = re.findall(pattern, text_lower)
+        if matches:
+            numbers = [float(m) for m in matches]
+            yoe = max(max(numbers), yoe)
+            
+    if yoe > 40:
+        return 0.0
+        
+    return round(yoe, 1)
+
 def analyze_cv_text(text: str) -> Dict:
     info = extract_basic_info(text)
     skills = extract_skills(text)
     skills = remove_duplicate_semantic(skills)
+    yoe = extract_years_of_experience(text)
 
     return {
         **info,
         "skills": skills,
-        "skill_count": len(skills)
+        "skill_count": len(skills),
+        "years_of_experience": yoe
     }
 
 def score_cv(candidate_skills, required_skills):

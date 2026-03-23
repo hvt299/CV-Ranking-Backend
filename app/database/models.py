@@ -6,6 +6,7 @@ class JobDescriptionCreate(BaseModel):
     title: str = Field(..., example="Thực tập sinh React Native")
     description: Optional[str] = Field(None, example="Phát triển ứng dụng mobile...")
     required_skills: List[str] = Field(..., example=["React Native", "TypeScript", "Firebase"])
+    required_experience: float = Field(default=0.0, description="Số năm kinh nghiệm yêu cầu")
 
 class JobDescriptionDB(JobDescriptionCreate):
     id: str
@@ -18,6 +19,7 @@ class CVCandidateCreate(BaseModel):
     github: Optional[str] = None
     skills: List[str] = []
     skill_count: int = 0
+    years_of_experience: float = Field(default=0.0, description="Số năm kinh nghiệm bóc tách được")
     raw_text: str = Field(exclude=True)
     status: str = Field(default="new", example="new, reviewed, interviewing, rejected, hired")
     notes: List[str] = Field(default_factory=list, description="Danh sách các ghi chú của HR")
