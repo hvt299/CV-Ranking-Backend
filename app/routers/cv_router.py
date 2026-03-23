@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Body
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Form, Body
 from bson import ObjectId
 from datetime import datetime, timezone
 
@@ -11,6 +11,8 @@ from app.services.nlp_engine import (
     score_cv, 
     calculate_nlp_similarity
 )
+
+from app.auth import get_current_user
 
 router = APIRouter(prefix="/api/v1/cv", tags=["CV Processing"])
 
@@ -99,7 +101,10 @@ async def rank_cv(
     }
 
 @router.post("/upload", status_code=201)
-async def upload_and_save_cv(file: UploadFile = File(...)):
+async def upload_and_save_cv(
+    file: UploadFile = File(...),
+    current_hr: str = Depends(get_current_user)
+):
     if not file.filename.endswith((".pdf", ".docx")):
         raise HTTPException(400, "Hệ thống chỉ hỗ trợ định dạng PDF hoặc DOCX")
 
@@ -112,9 +117,22 @@ async def upload_and_save_cv(file: UploadFile = File(...)):
     extracted_info = analyze_cv_text(text)
 
     db = get_db()
+
+    candidate_email = extracted_info.get("email")
+    if candidate_email:
+        existing_cv = await db["cvs"].find_one({
+            "email": candidate_email,
+            "uploaded_by": current_hr
+        })
+        if existing_cv:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Ứng viên {candidate_email} đã tồn tại trong kho dữ liệu của bạn!"
+            )
+
     cv_document = {
         "filename": file.filename,
-        "email": extracted_info.get("email"),
+        "email": candidate_email,
         "phone": extracted_info.get("phone"),
         "github": extracted_info.get("github"),
         "skills": extracted_info.get("skills", []),
@@ -124,6 +142,7 @@ async def upload_and_save_cv(file: UploadFile = File(...)):
         "raw_text": text,
         "status": "new",
         "notes": [],
+        "uploaded_by": current_hr,
         "created_at": datetime.now(timezone.utc)
     }
 
