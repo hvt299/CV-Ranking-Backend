@@ -85,6 +85,7 @@ def analyze_cv_text(text: str) -> Dict:
 
 from app.database.config import connect_to_mongo, close_mongo_connection, get_db
 from app.database.models import JobDescriptionCreate
+from bson import ObjectId
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Body
 from fastapi.concurrency import run_in_threadpool
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -283,3 +284,51 @@ async def upload_and_save_cv(file: UploadFile = File(...)):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi khi lưu vào Database: {str(e)}")
+    
+@app.get("/api/v1/jobs/{job_id}/ranking")
+async def get_job_ranking(job_id: str):
+    db = get_db()
+    
+    try:
+        job = await db["jobs"].find_one({"_id": ObjectId(job_id)})
+        if not job:
+            raise HTTPException(status_code=404, detail="Không tìm thấy Job Description")
+
+        cvs_cursor = db["cvs"].find({})
+        cvs = await cvs_cursor.to_list(length=100)
+
+        if not cvs:
+            return {"message": "Chưa có CV nào trong hệ thống để xếp hạng."}
+
+        leaderboard = []
+        for cv in cvs:
+            skill_ranking = score_cv(cv.get("skills", []), job.get("required_skills", []))
+            skill_score = skill_ranking["score"]
+            
+            nlp_score = calculate_nlp_similarity(cv.get("raw_text", ""), job.get("description", ""))
+            
+            final_score = round((0.7 * skill_score) + (0.3 * nlp_score), 2)
+            
+            leaderboard.append({
+                "cv_id": str(cv["_id"]),
+                "filename": cv["filename"],
+                "candidate_email": cv.get("email", "Không có"),
+                "scores": {
+                    "final_score": final_score,
+                    "skill_score": skill_score,
+                    "nlp_score": nlp_score
+                },
+                "matched_skills": skill_ranking["matched_skills"]
+            })
+
+        leaderboard.sort(key=lambda x: x["scores"]["final_score"], reverse=True)
+
+        return {
+            "status": "success",
+            "job_title": job.get("title"),
+            "total_candidates": len(leaderboard),
+            "leaderboard": leaderboard
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi khi xử lý xếp hạng: {str(e)}")
