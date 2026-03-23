@@ -1,0 +1,94 @@
+from fastapi import APIRouter, HTTPException, Body, Query, Depends
+from bson import ObjectId
+from datetime import datetime, timezone
+
+from app.database.config import get_db
+from app.database.models import JobDescriptionCreate
+from app.auth import get_current_user
+
+from app.services.nlp_engine import score_cv, calculate_nlp_similarity
+
+router = APIRouter(prefix="/api/v1/jobs", tags=["Job Management & Ranking"])
+
+@router.post("/", status_code=201)
+async def create_job(job: JobDescriptionCreate = Body(...)):
+    db = get_db()
+    
+    job_dict = job.model_dump()
+    job_dict["created_at"] = datetime.now(timezone.utc)
+    job_dict["required_skills"] = [s.strip().lower() for s in job_dict["required_skills"]]
+    
+    new_job = await db["jobs"].insert_one(job_dict)
+    
+    return {
+        "status": "success",
+        "message": "Đã tạo Job Description thành công",
+        "job_id": str(new_job.inserted_id)
+    }
+
+@router.get("/{job_id}/ranking")
+async def get_job_ranking(
+    job_id: str,
+    page: int = Query(1, ge=1, description="Số trang hiện tại (mặc định: 1)"),
+    limit: int = Query(10, ge=1, le=50, description="Số CV mỗi trang (mặc định: 10, tối đa: 50)"),
+    min_score: float = Query(0.0, ge=0.0, le=100.0, description="Lọc CV có điểm lớn hơn hoặc bằng"),
+    current_hr: str = Depends(get_current_user)
+):
+    db = get_db()
+    
+    try:
+        job = await db["jobs"].find_one({"_id": ObjectId(job_id)})
+        if not job:
+            raise HTTPException(status_code=404, detail="Không tìm thấy Job Description")
+
+        cvs_cursor = db["cvs"].find({})
+        cvs = await cvs_cursor.to_list(length=None)
+
+        if not cvs:
+            return {"message": "Chưa có CV nào trong hệ thống."}
+
+        leaderboard = []
+        for cv in cvs:
+            skill_ranking = score_cv(cv.get("skills", []), job.get("required_skills", []))
+            nlp_score = calculate_nlp_similarity(cv.get("raw_text", ""), job.get("description", ""))
+            final_score = round((0.7 * skill_ranking["score"]) + (0.3 * nlp_score), 2)
+            
+            leaderboard.append({
+                "cv_id": str(cv["_id"]),
+                "filename": cv["filename"],
+                "candidate_email": cv.get("email", "Không có"),
+                "scores": {
+                    "final_score": final_score,
+                    "skill_score": skill_ranking["score"],
+                    "nlp_score": nlp_score
+                },
+                "matched_skills": skill_ranking["matched_skills"]
+            })
+
+        if min_score > 0:
+            leaderboard = [cv for cv in leaderboard if cv["scores"]["final_score"] >= min_score]
+
+        leaderboard.sort(key=lambda x: x["scores"]["final_score"], reverse=True)
+
+        total_candidates = len(leaderboard)
+        total_pages = (total_candidates + limit - 1) // limit
+        start_idx = (page - 1) * limit
+        end_idx = start_idx + limit
+        
+        paginated_leaderboard = leaderboard[start_idx:end_idx]
+
+        return {
+            "status": "success",
+            "job_title": job.get("title"),
+            "pagination": {
+                "current_page": page,
+                "total_pages": total_pages,
+                "total_candidates_matched": total_candidates,
+                "limit": limit
+            },
+            "leaderboard": paginated_leaderboard
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi hệ thống: {str(e)}")
+    
