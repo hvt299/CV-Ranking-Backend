@@ -84,7 +84,7 @@ def analyze_cv_text(text: str) -> Dict:
     }
 
 from app.database.config import connect_to_mongo, close_mongo_connection, get_db
-from app.database.models import JobDescriptionCreate
+from app.database.models import JobDescriptionCreate, CVUpdate
 from bson import ObjectId
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Body, Query
 from fastapi.concurrency import run_in_threadpool
@@ -349,3 +349,34 @@ async def get_job_ranking(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi hệ thống: {str(e)}")
+    
+@app.patch("/api/v1/cv/{cv_id}")
+async def update_cv_status_and_notes(cv_id: str, update_data: CVUpdate = Body(...)):
+    db = get_db()
+    
+    try:
+        filter_query = {"_id": ObjectId(cv_id)}
+        
+        update_query = {}
+        
+        if update_data.status:
+            update_query.setdefault("$set", {})["status"] = update_data.status
+            
+        if update_data.note:
+            update_query.setdefault("$push", {})["notes"] = update_data.note
+            
+        if not update_query:
+            return {"message": "Không có dữ liệu mới nào để cập nhật"}
+
+        result = await db["cvs"].update_one(filter_query, update_query)
+        
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Không tìm thấy CV này")
+
+        return {
+            "status": "success",
+            "message": "Đã cập nhật hồ sơ ứng viên thành công"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi khi cập nhật CV: {str(e)}")
