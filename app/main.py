@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import io
 import re
@@ -82,7 +83,9 @@ def analyze_cv_text(text: str) -> Dict:
         "skill_count": len(skills)
     }
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from app.database.config import connect_to_mongo, close_mongo_connection, get_db
+from app.database.models import JobDescriptionCreate
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Body
 from fastapi.concurrency import run_in_threadpool
 
 app = FastAPI(
@@ -128,6 +131,14 @@ def root():
 @app.get("/ping")
 def ping():
     return {"status": "ok"}
+
+@app.on_event("startup")
+async def startup_db_client():
+    await connect_to_mongo()
+
+@app.on_event("shutdown")
+async def shutdown_db_client():
+    await close_mongo_connection()
 
 @app.post("/api/v1/cv/parse")
 async def parse_cv(file: UploadFile = File(...)):
@@ -191,3 +202,56 @@ async def rank_cv(
         "candidate_skills": extracted["skills"],
         "ranking": ranking
     }
+
+@app.post("/api/v1/jobs", status_code=201)
+async def create_job(job: JobDescriptionCreate = Body(...)):
+    db = get_db()
+    
+    job_dict = job.dict()
+    job_dict["created_at"] = datetime.utcnow()
+    job_dict["required_skills"] = [s.strip().lower() for s in job_dict["required_skills"]]
+    
+    new_job = await db["jobs"].insert_one(job_dict)
+    
+    return {
+        "status": "success",
+        "message": "Đã tạo Job Description thành công",
+        "job_id": str(new_job.inserted_id)
+    }
+
+@app.post("/api/v1/cv/upload", status_code=201)
+async def upload_and_save_cv(file: UploadFile = File(...)):
+    if not file.filename.endswith((".pdf", ".docx")):
+        raise HTTPException(400, "Hệ thống chỉ hỗ trợ định dạng PDF hoặc DOCX")
+
+    content = await file.read()
+
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(400, "Dung lượng file vượt quá 5MB giới hạn")
+
+    text = await extract_text(file, content)
+    extracted_info = analyze_cv_text(text)
+
+    db = get_db()
+    cv_document = {
+        "filename": file.filename,
+        "email": extracted_info.get("email"),
+        "phone": extracted_info.get("phone"),
+        "github": extracted_info.get("github"),
+        "skills": extracted_info.get("skills", []),
+        "skill_count": extracted_info.get("skill_count", 0),
+        "raw_text": text,
+        "created_at": datetime.utcnow()
+    }
+
+    try:
+        result = await db["cvs"].insert_one(cv_document)
+        
+        return {
+            "status": "success",
+            "message": "CV đã được phân tích và lưu trữ an toàn",
+            "cv_id": str(result.inserted_id),
+            "data": extracted_info
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi khi lưu vào Database: {str(e)}")

@@ -3,3 +3,7 @@ uvicorn
 python-multipart
 pdfplumber
 python-docx
+motor
+pydantic[email]
+dnspython
+python-dotenv
