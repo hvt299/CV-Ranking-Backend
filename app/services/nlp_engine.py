@@ -105,17 +105,35 @@ def extract_years_of_experience(text: str) -> float:
         
     return round(yoe, 1)
 
+def extract_education_level(text: str) -> str:
+    text_lower = text.lower()
+    
+    education_patterns = {
+        "Tiến sĩ (PhD)": r"\b(tiến sĩ|phd|ph\.d|doctorate)\b",
+        "Thạc sĩ (Master)": r"\b(thạc sĩ|thac si|master|mba|msc|m\.s|m\.a)\b",
+        "Cử nhân/Kỹ sư (Bachelor)": r"\b(cử nhân|cu nhan|kỹ sư|ky su|bachelor|bsc|b\.s|b\.a|engineer)\b",
+        "Cao đẳng (College)": r"\b(cao đẳng|cao dang|associate degree|college)\b"
+    }
+
+    for level, pattern in education_patterns.items():
+        if re.search(pattern, text_lower):
+            return level
+
+    return "Không đề cập"
+
 def analyze_cv_text(text: str) -> Dict:
     info = extract_basic_info(text)
     skills = extract_skills(text)
     skills = remove_duplicate_semantic(skills)
     yoe = extract_years_of_experience(text)
+    edu_level = extract_education_level(text)
 
     return {
         **info,
         "skills": skills,
         "skill_count": len(skills),
-        "years_of_experience": yoe
+        "years_of_experience": yoe,
+        "education_level": edu_level
     }
 
 def score_cv(candidate_skills, required_skills):

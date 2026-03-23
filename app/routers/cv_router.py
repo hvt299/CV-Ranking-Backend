@@ -90,6 +90,7 @@ async def rank_cv(
             "yoe_score": round(yoe_score, 2)
         },
         "details": {
+            "candidate_education": extracted.get("education_level", "Không đề cập"),
             "candidate_yoe": candidate_yoe,
             "candidate_skills": extracted["skills"],
             "matched_skills": skill_ranking["matched_skills"],
@@ -119,7 +120,10 @@ async def upload_and_save_cv(file: UploadFile = File(...)):
         "skills": extracted_info.get("skills", []),
         "skill_count": extracted_info.get("skill_count", 0),
         "years_of_experience": extracted_info.get("years_of_experience", 0.0),
+        "education_level": extracted_info.get("education_level", "Không đề cập"),
         "raw_text": text,
+        "status": "new",
+        "notes": [],
         "created_at": datetime.now(timezone.utc)
     }
 

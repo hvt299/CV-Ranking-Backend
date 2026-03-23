@@ -20,6 +20,7 @@ class CVCandidateCreate(BaseModel):
     skills: List[str] = []
     skill_count: int = 0
     years_of_experience: float = Field(default=0.0, description="Số năm kinh nghiệm bóc tách được")
+    education_level: str = Field(default="Không đề cập", description="Trình độ học vấn cao nhất")
     raw_text: str = Field(exclude=True)
     status: str = Field(default="new", example="new, reviewed, interviewing, rejected, hired")
     notes: List[str] = Field(default_factory=list, description="Danh sách các ghi chú của HR")

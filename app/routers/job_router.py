@@ -67,7 +67,8 @@ async def get_job_ranking(
                     "yoe_score": round(yoe_score, 2)
                 },
                 "matched_skills": skill_ranking["matched_skills"],
-                "years_of_experience": cand_yoe
+                "years_of_experience": cand_yoe,
+                "education_level": cv.get("education_level", "Không đề cập")
             })
 
         if min_score > 0:
