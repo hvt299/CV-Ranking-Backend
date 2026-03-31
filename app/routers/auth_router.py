@@ -10,8 +10,6 @@ from app.services.email_service import send_verification_email, send_reset_passw
 import urllib.parse
 from bson import ObjectId
 import os
-from google.oauth2 import id_token
-from google.auth.transport import requests as google_requests
 from pydantic import BaseModel
 import httpx
 
