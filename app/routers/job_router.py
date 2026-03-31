@@ -120,3 +120,14 @@ async def get_job_ranking(
         raise HTTPException(status_code=400, detail="Định dạng ngày không hợp lệ. Vui lòng dùng YYYY-MM-DD")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi hệ thống: {str(e)}")
+    
+@router.get("/")
+async def get_all_jobs(current_hr: str = Depends(get_current_user)):
+    db = get_db()
+    jobs_cursor = db["jobs"].find({"created_by": current_hr}).sort("created_at", -1)
+    jobs = await jobs_cursor.to_list(length=100)
+    
+    for job in jobs:
+        job["id"] = str(job.pop("_id"))
+        
+    return jobs

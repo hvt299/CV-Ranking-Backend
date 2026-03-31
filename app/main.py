@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.database.config import connect_to_mongo, close_mongo_connection
 from app.routers import auth_router, cv_router, job_router
 from contextlib import asynccontextmanager
@@ -14,6 +15,14 @@ app = FastAPI(
     version="1.0.0",
     description="Hệ thống phân tích và xếp hạng hồ sơ ứng viên bằng AI",
     lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(auth_router.router)

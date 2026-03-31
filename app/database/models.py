@@ -35,6 +35,10 @@ class CVUpdate(BaseModel):
 
 class HRUserCreate(BaseModel):
     email: EmailStr
+    password: str = Field(..., min_length=6)
+
+class HRUserLogin(BaseModel):
+    email: EmailStr
     password: str
 
 class HRUserDB(BaseModel):
