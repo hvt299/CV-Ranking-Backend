@@ -86,15 +86,54 @@ def remove_duplicate_semantic(skills: list) -> list:
             filtered.append(skill)
     return filtered
 
+def extract_years_of_experience(text: str) -> float:
+    text_lower = text.lower()
+    
+    pattern1 = r"(\d+(?:\.\d+)?)\s*(?:\+)?\s*(?:năm|years?)\s*(?:kinh nghiệm|kinh nghiem|of experience|experience|exp)"
+    pattern2 = r"(?:kinh nghiệm|kinh nghiem|experience|exp).{0,20}?(\d+(?:\.\d+)?)\s*(?:năm|years?)"
+
+    yoe = 0.0
+    
+    for pattern in [pattern1, pattern2]:
+        matches = re.findall(pattern, text_lower)
+        if matches:
+            numbers = [float(m) for m in matches]
+            yoe = max(max(numbers), yoe)
+            
+    if yoe > 40:
+        return 0.0
+        
+    return round(yoe, 1)
+
+def extract_education_level(text: str) -> str:
+    text_lower = text.lower()
+    
+    education_patterns = {
+        "Tiến sĩ (PhD)": r"\b(tiến sĩ|phd|ph\.d|doctorate)\b",
+        "Thạc sĩ (Master)": r"\b(thạc sĩ|thac si|master|mba|msc|m\.s|m\.a)\b",
+        "Cử nhân/Kỹ sư (Bachelor)": r"\b(cử nhân|cu nhan|kỹ sư|ky su|bachelor|bsc|b\.s|b\.a|engineer)\b",
+        "Cao đẳng (College)": r"\b(cao đẳng|cao dang|associate degree|college)\b"
+    }
+
+    for level, pattern in education_patterns.items():
+        if re.search(pattern, text_lower):
+            return level
+
+    return "Không đề cập"
+
 def analyze_cv_text(text: str) -> Dict:
     info = extract_basic_info(text)
     skills = extract_skills(text)
     skills = remove_duplicate_semantic(skills)
+    yoe = extract_years_of_experience(text)
+    edu_level = extract_education_level(text)
 
     return {
         **info,
         "skills": skills,
-        "skill_count": len(skills)
+        "skill_count": len(skills),
+        "years_of_experience": yoe,
+        "education_level": edu_level
     }
 
 def score_cv(candidate_skills, required_skills):

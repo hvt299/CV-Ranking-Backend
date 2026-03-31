@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Body
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Form, Body
 from bson import ObjectId
 from datetime import datetime, timezone
 
@@ -11,6 +11,8 @@ from app.services.nlp_engine import (
     score_cv, 
     calculate_nlp_similarity
 )
+
+from app.auth import get_current_user
 
 router = APIRouter(prefix="/api/v1/cv", tags=["CV Processing"])
 
@@ -56,7 +58,8 @@ async def analyze_cv(file: UploadFile = File(...)):
 async def rank_cv(
     file: UploadFile = File(...),
     required_skills: str = Form(...),
-    jd_description: str = Form("")
+    jd_description: str = Form(""),
+    required_experience: float = Form(0.0)
 ):
     if not file.filename.endswith((".pdf", ".docx")):
         raise HTTPException(400, "Hệ thống chỉ hỗ trợ định dạng PDF hoặc DOCX")
@@ -75,16 +78,22 @@ async def rank_cv(
 
     nlp_score = calculate_nlp_similarity(text, jd_description) if jd_description else 0.0
 
-    final_score = round((0.7 * skill_score) + (0.3 * nlp_score), 2)
+    candidate_yoe = extracted.get("years_of_experience", 0.0)
+    yoe_score = 100.0 if candidate_yoe >= required_experience else (candidate_yoe / required_experience) * 100 if required_experience > 0 else 100.0
+
+    final_score = round((0.5 * skill_score) + (0.3 * nlp_score) + (0.2 * yoe_score), 2)
 
     return {
         "filename": file.filename,
         "scores": {
             "final_score": final_score,
             "skill_score": skill_score,
-            "nlp_score": nlp_score
+            "nlp_score": nlp_score,
+            "yoe_score": round(yoe_score, 2)
         },
         "details": {
+            "candidate_education": extracted.get("education_level", "Không đề cập"),
+            "candidate_yoe": candidate_yoe,
             "candidate_skills": extracted["skills"],
             "matched_skills": skill_ranking["matched_skills"],
             "missing_skills": skill_ranking["missing_skills"]
@@ -92,7 +101,10 @@ async def rank_cv(
     }
 
 @router.post("/upload", status_code=201)
-async def upload_and_save_cv(file: UploadFile = File(...)):
+async def upload_and_save_cv(
+    file: UploadFile = File(...),
+    current_hr: str = Depends(get_current_user)
+):
     if not file.filename.endswith((".pdf", ".docx")):
         raise HTTPException(400, "Hệ thống chỉ hỗ trợ định dạng PDF hoặc DOCX")
 
@@ -105,14 +117,32 @@ async def upload_and_save_cv(file: UploadFile = File(...)):
     extracted_info = analyze_cv_text(text)
 
     db = get_db()
+
+    candidate_email = extracted_info.get("email")
+    if candidate_email:
+        existing_cv = await db["cvs"].find_one({
+            "email": candidate_email,
+            "uploaded_by": current_hr
+        })
+        if existing_cv:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Ứng viên {candidate_email} đã tồn tại trong kho dữ liệu của bạn!"
+            )
+
     cv_document = {
         "filename": file.filename,
-        "email": extracted_info.get("email"),
+        "email": candidate_email,
         "phone": extracted_info.get("phone"),
         "github": extracted_info.get("github"),
         "skills": extracted_info.get("skills", []),
         "skill_count": extracted_info.get("skill_count", 0),
+        "years_of_experience": extracted_info.get("years_of_experience", 0.0),
+        "education_level": extracted_info.get("education_level", "Không đề cập"),
         "raw_text": text,
+        "status": "new",
+        "notes": [],
+        "uploaded_by": current_hr,
         "created_at": datetime.now(timezone.utc)
     }
 
