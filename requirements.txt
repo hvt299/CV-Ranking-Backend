@@ -11,4 +11,5 @@ scikit-learn
 PyJWT
 passlib[bcrypt]
 bcrypt==4.0.1
-python-multipart
+httpx
+requests
