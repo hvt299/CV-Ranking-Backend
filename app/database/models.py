@@ -1,4 +1,5 @@
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, field_validator
+import re
 from typing import List, Optional
 from datetime import datetime, timezone
 
@@ -35,7 +36,15 @@ class CVUpdate(BaseModel):
 
 class HRUserCreate(BaseModel):
     email: EmailStr
-    password: str = Field(..., min_length=6)
+    full_name: str = Field(..., min_length=6, example="Trần Nam")
+    password: str
+
+    @field_validator('password')
+    def validate_password(cls, v):
+        pattern = r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$"
+        if not re.match(pattern, v):
+            raise ValueError("Mật khẩu phải từ 8 ký tự, gồm ít nhất 1 chữ hoa, 1 chữ thường, 1 số và 1 ký tự đặc biệt.")
+        return v
 
 class HRUserLogin(BaseModel):
     email: EmailStr
@@ -44,8 +53,12 @@ class HRUserLogin(BaseModel):
 class HRUserDB(BaseModel):
     id: str
     email: EmailStr
+    full_name: str
     hashed_password: str
-    created_at: datetime = Field(default_factory=datetime.now(timezone.utc))
+    avatar: str
+    original_avatar: str
+    is_verified: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class Token(BaseModel):
     access_token: str
