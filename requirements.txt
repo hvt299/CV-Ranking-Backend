@@ -1,3 +1,14 @@
 fastapi
 uvicorn
 python-multipart
+pdfplumber
+python-docx
+motor
+pydantic[email]
+dnspython
+python-dotenv
+scikit-learn
+PyJWT
+passlib[bcrypt]
+bcrypt==4.0.1
+python-multipart

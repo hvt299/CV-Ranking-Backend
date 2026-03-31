@@ -1,0 +1,73 @@
+javascript,js,javascript,ecmascript
+typescript,ts,typescript
+react,reactjs,react
+next.js,nextjs,next
+vue,vuejs,vue
+angular,angularjs,angular
+html,html5
+css,css3
+sass,scss,sass
+tailwind,tailwindcss
+bootstrap,bootstrap
+node.js,nodejs,node
+express,expressjs
+nestjs,nest,nestjs
+python,python
+django,django
+flask,flask
+fastapi,fastapi
+java,java
+spring,spring,springboot
+kotlin,kotlin
+android,android
+ios,ios,swift
+swift,swift
+react native,react native,reactnative
+flutter,flutter,dart
+php,php
+laravel,laravel
+c++,c++
+c#,c#
+.net,dotnet,.net core
+golang,go,golang
+rust,rust
+ruby,ruby
+rails,ruby on rails,rails
+mysql,mysql
+postgresql,postgres,postgresql
+mongodb,mongo,mongodb
+sqlite,sqlite
+redis,redis
+firebase,firebase
+docker,docker
+kubernetes,k8s,kubernetes
+git,git
+github,github
+gitlab,gitlab
+bitbucket,bitbucket
+linux,linux
+bash,shell,bash
+nginx,nginx
+apache,apache
+aws,aws,amazon web services
+azure,azure,microsoft azure
+gcp,gcp,google cloud
+graphql,graphql
+rest api,rest,restful api
+microservices,microservices
+ci/cd,ci cd,continuous integration,continuous delivery
+terraform,terraform
+ansible,ansible
+prometheus,prometheus
+grafana,grafana
+elasticsearch,elasticsearch,elastic
+hadoop,hadoop
+spark,apache spark,spark
+machine learning,ml,machine learning
+deep learning,dl,deep learning
+data science,data science
+pandas,pandas
+numpy,numpy
+opencv,opencv
+nlp,natural language processing,nlp
+computer vision,cv,computer vision

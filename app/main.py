@@ -1,24 +1,38 @@
-import os
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.database.config import connect_to_mongo, close_mongo_connection
+from app.routers import auth_router, cv_router, job_router
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await connect_to_mongo()
+    yield
+    await close_mongo_connection()
 
 app = FastAPI(
     title="CV Ranking System API",
-    description="Backend AI phân tích và xếp hạng CV",
-    version="1.0.0"
+    version="1.0.0",
+    description="Hệ thống phân tích và xếp hạng hồ sơ ứng viên bằng AI",
+    lifespan=lifespan
 )
 
-@app.get("/")
-def read_root():
-    return {"message": "Hello! Backend AI đang chạy rất mượt mà 🚀"}
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.get("/ping")
+app.include_router(auth_router.router)
+app.include_router(cv_router.router)
+app.include_router(job_router.router)
+
+@app.get("/", tags=["Health Check"])
+def root():
+    return {"message": "CV Ranking System API is running smoothly!"}
+
+@app.get("/ping", tags=["Health Check"])
 def ping():
-    return {"status": "Success", "data": "Hệ thống sẵn sàng nhận CV!"}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        "app.main:app",
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", 8000))
-    )
+    return {"status": "ok"}
