@@ -1,11 +1,11 @@
-from fastapi import APIRouter, HTTPException, status, Body, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, Body, BackgroundTasks
 from datetime import datetime, timezone, timedelta
 import secrets
 import hashlib
 import jwt
 from app.database.config import get_db
 from app.database.models import HRUserCreate, HRUserLogin, Token
-from app.auth import get_password_hash, verify_password, create_access_token, JWT_SECRET, ALGORITHM
+from app.auth import get_current_user, get_password_hash, verify_password, create_access_token, JWT_SECRET, ALGORITHM
 from app.services.email_service import send_verification_email, send_reset_password_email
 import urllib.parse
 from bson import ObjectId
@@ -192,3 +192,17 @@ async def google_login(request: GoogleAuthRequest = Body(...)):
         
     except ValueError:
         raise HTTPException(status_code=401, detail="Token từ Google không hợp lệ hoặc đã hết hạn")
+    
+@router.get("/me")
+async def get_current_user_profile(email: str = Depends(get_current_user)):
+    db = get_db()
+    user = await db["hr_users"].find_one({"email": email})
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="Không tìm thấy thông tin người dùng")
+        
+    return {
+        "email": user["email"],
+        "full_name": user.get("full_name", "HR Manager"),
+        "avatar": user.get("avatar", "")
+    }
