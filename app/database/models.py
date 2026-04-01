@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 
 class SkillDetail(BaseModel):
     name: str = Field(..., description="Tên kỹ năng (VD: React, NodeJS)")
-    weight: float = Field(default=0.5, ge=0.1, le=1.0, description="Trọng số kỹ năng (Từ 0.1 đến 1.0)")
-    min_years: int = Field(default=0, description="Số năm kinh nghiệm tối thiểu cho kỹ năng này")
+    weight: float = Field(default=0.5, ge=0.1, le=1.0, description="Trọng số kỹ năng")
+    min_years: float = Field(default=0.0, description="Số năm kinh nghiệm tối thiểu")
 
 class EducationRequirement(BaseModel):
     min_level: str = Field(default="Không yêu cầu", description="Cấp bậc học vấn tối thiểu")
@@ -19,8 +19,8 @@ class SalaryRange(BaseModel):
 
 class LocationDetail(BaseModel):
     city: str = Field(..., description="Thành phố / Tỉnh (VD: TP.HCM)")
-    district: Optional[str] = None
-    country: str = Field(default="Vietnam")
+    address: Optional[str] = None
+    country: str = Field(default="Việt Nam")
 
 class JobCreateEnterprise(BaseModel):
     title: str = Field(..., example="Senior Frontend Developer")
@@ -33,7 +33,7 @@ class JobCreateEnterprise(BaseModel):
 
     required_skills: List[SkillDetail] = Field(..., description="Danh sách kỹ năng BẮT BUỘC")
     preferred_skills: List[SkillDetail] = Field(default=[], description="Danh sách kỹ năng ƯU TIÊN (điểm cộng)")
-    min_yoe: int = Field(default=0, description="Tổng số năm kinh nghiệm tối thiểu")
+    min_yoe: float = Field(default=0.0, description="Tổng số năm kinh nghiệm tối thiểu")
     education: Optional[EducationRequirement] = None
 
     salary: Optional[SalaryRange] = None
