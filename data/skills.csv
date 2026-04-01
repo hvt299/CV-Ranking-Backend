@@ -1,73 +1,477 @@
-javascript,js,javascript,ecmascript
+javascript,js,ecmascript,javascript
 typescript,ts,typescript
+python,python
+java,java
+golang,go,golang
+rust,rust
+c++,cpp,c++
+c#,csharp,c#
+php,php
+ruby,ruby
+swift,swift
+kotlin,kotlin
+dart,dart
+scala,scala
+elixir,elixir
+haskell,haskell
+objective-c,objective c,objc
+bash,shell,bash
+powershell,powershell
+sql,sql
 react,reactjs,react
-next.js,nextjs,next
 vue,vuejs,vue
 angular,angularjs,angular
-html,html5
-css,css3
-sass,scss,sass
-tailwind,tailwindcss
-bootstrap,bootstrap
-node.js,nodejs,node
+next.js,nextjs,next
+nuxt.js,nuxtjs,nuxt
+svelte,svelte
+solidjs,solid,solidjs
 express,expressjs
 nestjs,nest,nestjs
-python,python
+spring,spring,springboot
+spring boot,springboot
 django,django
 flask,flask
 fastapi,fastapi
-java,java
-spring,spring,springboot
-kotlin,kotlin
-android,android
-ios,ios,swift
-swift,swift
-react native,react native,reactnative
-flutter,flutter,dart
-php,php
 laravel,laravel
-c++,c++
-c#,c#
-.net,dotnet,.net core
-golang,go,golang
-rust,rust
-ruby,ruby
+symfony,symfony
 rails,ruby on rails,rails
+asp.net,aspnet,asp.net core
+blazor,blazor
+electron,electron
+react native,reactnative
+flutter,flutter
+ionic,ionic
+tensorflow,tensorflow
+pytorch,pytorch
+keras,keras
+opencv,opencv
+html,html5
+css,css3
+sass,scss,sass
+less,less
+stylus,stylus
+tailwind,tailwindcss
+bootstrap,bootstrap
+material ui,material-ui,mui
+ant design,antd,ant design
+chakra ui,chakra,chakraui
+mantine,mantine
+semantic ui,semantic-ui
+redux,redux
+redux toolkit,rtk,redux toolkit
+mobx,mobx
+zustand,zustand
+recoil,recoil
+jotai,jotai
+valtio,valtio
+webpack,webpack
+vite,vite
+parcel,parcel
+rollup,rollup
+esbuild,esbuild
+babel,babel
+postcss,postcss
+eslint,eslint
+prettier,prettier
+storybook,storybook
+react query,react-query,tanstack query
+tanstack query,react query
+swr,swr
+formik,formik
+react hook form,react-hook-form,rhf
+axios,axios
+fetch api,fetch,fetch api
+framer motion,framer-motion
+gsap,gsap
+three.js,threejs,three
+pwa,progressive web app,pwa
+service worker,service workers
+websocket,websockets,websocket
+i18n,internationalization,i18n
+l10n,localization,l10n
+node.js,nodejs,node
+express,expressjs
+nestjs,nest,nestjs
+koa,koa
+fastify,fastify
+spring,spring
+spring boot,springboot
+spring mvc,springmvc
+spring security,springsecurity
+django,django
+flask,flask
+fastapi,fastapi
+laravel,laravel
+symfony,symfony
+asp.net,aspnet,asp.net core
+entity framework,ef,entityframework
+ruby on rails,rails,ruby on rails
+gin,gin golang,gin
+echo,echo framework,echo
+hibernate,hibernate
+jpa,jpa
+typeorm,typeorm
+sequelize,sequelize
+prisma,prisma
+rest api,rest,restful api
+graphql,graphql
+grpc,grpc
+websocket,websockets,websocket
+oauth2,oauth 2.0,oauth2
+jwt,json web token,jwt
+openid connect,oidc,openid
+redis,redis
+memcached,memcached
+kafka,apache kafka,kafka
+rabbitmq,rabbit mq,rabbitmq
+activemq,active mq,activemq
+microservices,microservices
+monolith,monolithic,monolith
+event-driven,event driven architecture,event-driven
+cqrs,cqrs
+event sourcing,event sourcing
+cron job,cron,cronjob
+job queue,queue system,job queue
+bull,bull queue,bull
+sidekiq,sidekiq
+api gateway,api gateway
+rate limiting,rate limit,rate limiting
+caching,caching
+logging,logging
+monitoring,monitoring
 mysql,mysql
 postgresql,postgres,postgresql
-mongodb,mongo,mongodb
+mariadb,mariadb
+oracle,oracle db,oracle
+sql server,mssql,sql server
 sqlite,sqlite
+mongodb,mongo,mongodb
+couchdb,couchdb
+cassandra,apache cassandra,cassandra
+dynamodb,dynamodb
+cosmos db,cosmosdb,azure cosmos db
 redis,redis
+memcached,memcached
+elasticsearch,elastic,elasticsearch
+opensearch,opensearch
 firebase,firebase
+firestore,cloud firestore,firestore
+realtime database,firebase realtime db,realtime database
+neo4j,neo4j
+arangodb,arangodb
+influxdb,influxdb
+timescaledb,timescale,timescaledb
+snowflake,snowflake
+bigquery,google bigquery,bigquery
+redshift,amazon redshift,redshift
+hbase,hbase
+clickhouse,clickhouse
+database design,db design,database design
+data modeling,data model,data modeling
+schema design,schema design
+indexing,indexes,indexing
+query optimization,query tuning,query optimization
+replication,replication
+sharding,sharding
+partitioning,partitioning
+backup,backup
+restore,restore
+etl,etl
+data warehousing,data warehouse,data warehousing
+data lake,data lake
+orm,orm
+nosql,nosql
+relational database,rdbms,relational database
+aws,amazon web services,aws
+azure,microsoft azure,azure
+gcp,google cloud,gcp
+ec2,aws ec2,ec2
+s3,aws s3,s3
+lambda,aws lambda,lambda
+rds,aws rds,rds
+cloudfront,cloudfront
+dynamodb,aws dynamodb,dynamodb
+virtual machines,vm,virtual machines
+serverless,serverless
 docker,docker
+docker compose,docker-compose,docker compose
 kubernetes,k8s,kubernetes
-git,git
-github,github
-gitlab,gitlab
-bitbucket,bitbucket
-linux,linux
-bash,shell,bash
-nginx,nginx
-apache,apache
-aws,aws,amazon web services
-azure,azure,microsoft azure
-gcp,gcp,google cloud
-graphql,graphql
-rest api,rest,restful api
-microservices,microservices
-ci/cd,ci cd,continuous integration,continuous delivery
+helm,helm
+openshift,openshift
+jenkins,jenkins
+github actions,github actions
+gitlab ci,gitlab ci,gitlab-ci
+circleci,circleci
+travis ci,travis,travisc
+ci/cd,continuous integration,continuous delivery,ci cd
 terraform,terraform
 ansible,ansible
+pulumi,pulumi
+cloudformation,aws cloudformation,cloudformation
+nginx,nginx
+apache,apache
+traefik,traefik
+load balancing,load balancer,load balancing
+reverse proxy,reverse proxy
 prometheus,prometheus
 grafana,grafana
-elasticsearch,elasticsearch,elastic
+datadog,datadog
+new relic,newrelic,new relic
+elk stack,elasticsearch logstash kibana,elk
+logstash,logstash
+kibana,kibana
+monitoring,monitoring
+logging,logging
+alerting,alerting
+linux,linux
+bash,shell,bash
+networking,networking
+dns,dns
+http,https,http
+tcp/ip,tcp ip,tcpip
+cdn,content delivery network,cdn
+jest,jest
+mocha,mocha
+chai,chai
+vitest,vitest
+jasmine,jasmine
+karma,karma
+cypress,cypress
+playwright,playwright
+selenium,selenium
+webdriver,webdriver
+puppeteer,puppeteer
+testcafe,testcafe
+junit,junit
+testng,testng
+nunit,nunit
+xunit,xunit
+pytest,pytest
+robot framework,robotframework,robot framework
+cucumber,cucumber,gherkin
+postman,postman
+insomnia,insomnia
+k6,k6
+locust,locust
+jmeter,apache jmeter,jmeter
+gatling,gatling
+sonarqube,sonarqube
+eslint,eslint
+test automation,test automation
+manual testing,manual testing
+unit testing,unit test,unit testing
+integration testing,integration test,integration testing
+e2e testing,end to end testing,e2e
+api testing,api testing
+ui testing,ui testing
+performance testing,performance test,performance testing
+load testing,load test,load testing
+stress testing,stress test,stress testing
+tdd,test driven development,tdd
+bdd,behavior driven development,bdd
+mocking,mock,mocking
+stubbing,stub,stubbing
+test case,test cases,test case
+test plan,test plan
+test strategy,test strategy
+regression testing,regression test,regression testing
+smoke testing,smoke test,smoke testing
+system design,system design
+software architecture,software architecture
+design patterns,design pattern,design patterns
+microservices,microservices
+monolith,monolithic architecture,monolith
+modular architecture,modular architecture
+distributed systems,distributed system,distributed systems
+scalability,scalable systems,scalability
+high availability,high availability
+fault tolerance,fault tolerant,fault tolerance
+resilience,resilience
+event-driven architecture,event driven,event-driven
+message-driven architecture,message driven architecture
+cqrs,cqrs
+event sourcing,event sourcing
+domain driven design,ddd,domain driven design
+clean architecture,clean architecture
+hexagonal architecture,ports and adapters,hexagonal architecture
+onion architecture,onion architecture
+layered architecture,n-tier architecture,layered architecture
+api design,api design
+restful design,rest design,restful design
+graphql design,graphql architecture,graphql design
+service discovery,service discovery
+api gateway,api gateway
+load balancing,load balancer,load balancing
+horizontal scaling,scale out,horizontal scaling
+vertical scaling,scale up,vertical scaling
+caching strategies,cache strategy,caching strategies
+cdn architecture,cdn architecture
+database scaling,database scaling
+sharding,sharding
+replication,replication
+consistency,eventual consistency,consistency
+cap theorem,cap theorem
+acid,acid properties,acid
+base,eventual consistency base,base
+idempotency,idempotent,idempotency
+rate limiting,rate limit,rate limiting
+circuit breaker,circuit breaker
+backpressure,back pressure,backpressure
+throttling,throttle,throttling
+observability,observability
+distributed tracing,distributed tracing
+logging architecture,centralized logging,logging architecture
+monitoring architecture,monitoring architecture
+security architecture,security architecture
+zero trust,zero trust architecture,zero trust
+multi-tenancy,multi tenant,multi-tenancy
+oauth2,oauth 2.0,oauth2
+jwt,json web token,jwt
+openid connect,oidc,openid
+https,https
+tls,tls
+ssl,ssl
+encryption,encryption
+symmetric encryption,symmetric encryption
+asymmetric encryption,asymmetric encryption
+rsa,rsa
+aes,aes
+hashing,hashing
+sha256,sha256
+bcrypt,bcrypt
+argon2,argon2
+penetration testing,pen test,penetration testing
+vulnerability assessment,vuln assessment,vulnerability assessment
+ethical hacking,ethical hacking
+owasp,owasp top 10,owasp
+xss,cross site scripting,xss
+csrf,cross site request forgery,csrf
+sql injection,sqli,sql injection
+command injection,command injection
+remote code execution,rce,remote code execution
+security architecture,security architecture
+zero trust,zero trust architecture,zero trust
+role based access control,rbac,role based access control
+attribute based access control,abac,attribute based access control
+least privilege,least privilege principle,least privilege
+firewall,firewall
+web application firewall,waf,web application firewall
+siem,siem
+intrusion detection system,ids,intrusion detection system
+intrusion prevention system,ips,intrusion prevention system
+mfa,multi-factor authentication,mfa
+2fa,two-factor authentication,2fa
+logging security,security logging
+audit trail,audit trail
+security monitoring,security monitoring
+security policy,security policy
+compliance,compliance
+gdpr,gdpr
+hipaa,hipaa
+secure coding,secure coding
+dependency scanning,dependency check,dependency scanning
+code review,code review
 hadoop,hadoop
 spark,apache spark,spark
-machine learning,ml,machine learning
-deep learning,dl,deep learning
-data science,data science
+kafka,apache kafka,kafka
+flink,apache flink,flink
+airflow,airflow
+dbt,dbt
 pandas,pandas
 numpy,numpy
-opencv,opencv
-nlp,natural language processing,nlp
+scipy,scipy
+matplotlib,matplotlib
+seaborn,seaborn
+scikit-learn,sklearn,scikit-learn
+tensorflow,tensorflow
+keras,keras
+pytorch,pytorch
+jax,jax
+machine learning,ml,machine learning
+deep learning,dl,deep learning
+reinforcement learning,rl,reinforcement learning
+natural language processing,nlp,natural language processing
+spaCy,spacy
+nltk,nltk
+transformers,transformers
+gpt,gpt
+bert,bert
+word2vec,word2vec
 computer vision,cv,computer vision
+opencv,opencv
+pillow,pillow
+yolov5,yolov5
+detectron2,detectron2
+feature engineering,feature engineering
+data preprocessing,data preprocessing
+data cleaning,data cleaning
+dimensionality reduction,dim reduction,dimensionality reduction
+pca,pca
+tsne,tsne
+umap,umap
+model deployment,model deployment
+mlops,mlops
+docker for ml,docker ml,docker for ml
+tensorflow serving,tensorflow serving
+torchserve,torchserve
+evaluation metrics,model metrics,evaluation metrics
+accuracy,accuracy
+precision,precision
+recall,recall
+f1 score,f1,f1 score
+roc auc,roc auc
+time series,time series analysis,time series
+arima,arima
+prophet,prophet
+lstm,lstm
+gru,gru
+recommendation system,recommender system,recommendation system
+collaborative filtering,collaborative filtering
+content-based filtering,content-based recommendation
+big data,big data
+data warehouse,data warehouse
+data lake,data lake
+etl,etl
+data pipeline,data pipeline
+websocket,websocket
+grpc,grpc
+rest api,rest,restful api
+graphql,graphql
+soap,soap
+api gateway,api gateway
+thrift,apache thrift,thrift
+json api,json api
+xml api,xml api
+unity,unity
+unreal,unreal engine,unreal
+godot,godot
+solidity,solidity
+web3,web3,ethereum
+smart contract,smart contract
+arduino,arduino
+embedded c,embedded c
+raspberry pi,raspberry pi
+iot,iot,internet of things
+esp32,esp32
+microcontroller,microcontroller
+fpga,fpga
+game physics,game physics
+ai in games,game ai,ai in games
+shader programming,shader programming
+vr development,vr development
+ar development,ar development
+blockchain development,blockchain development
+defi,defi
+nft,nft
+cryptography,cryptography
+iot protocols,mqtt,mqtt
+coap,coap
+zigbee,zigbee
+ble,bluetooth low energy,ble
+hardware interfacing,hardware interfacing
+real-time systems,real time systems,real-time systems
+embedded linux,embedded linux
+sensor integration,sensor integration
+actuator programming,actuator programming
+edge computing,edge computing
+low power devices,low power devices

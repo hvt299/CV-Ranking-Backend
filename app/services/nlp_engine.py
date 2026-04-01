@@ -2,7 +2,7 @@ import os
 import io
 import re
 import csv
-from typing import List, Dict
+from typing import Set, Dict, List, Tuple
 
 import pdfplumber
 import docx
@@ -12,9 +12,15 @@ from fastapi.concurrency import run_in_threadpool
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import logging
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SKILLS_FILE_PATH = os.path.join(BASE_DIR, "data", "skills.csv")
+
+tfidf_vectorizer = TfidfVectorizer(stop_words='english')
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def load_skills(file_path: str) -> Dict[str, List[str]]:
     skill_map = {}
@@ -136,37 +142,81 @@ def analyze_cv_text(text: str) -> Dict:
         "education_level": edu_level
     }
 
-def score_cv(candidate_skills, required_skills):
-    candidate_set = set([s.lower() for s in candidate_skills])
-    required_set = set([s.lower() for s in required_skills])
+def calculate_skill_score(cv_skills: Set[str], required_skills: List[dict], preferred_skills: List[dict]) -> float:
+    if not required_skills and not preferred_skills:
+        return 0.0
 
-    if not required_set:
-        return {
-            "score": 0,
-            "matched_skills": [],
-            "missing_skills": []
-        }
+    cv_skills_lower = {skill.lower().strip() for skill in cv_skills}
+    
+    total_required_weight = sum(skill.get("weight", 0.5) for skill in required_skills)
+    earned_required_score = 0.0
+    
+    for req_skill in required_skills:
+        skill_name = req_skill.get("name", "").lower().strip()
+        if skill_name in cv_skills_lower:
+            earned_required_score += req_skill.get("weight", 0.5)
+            
+    base_skill_score = (earned_required_score / total_required_weight) * 100 if total_required_weight > 0 else 0
 
-    matched = candidate_set.intersection(required_set)
+    bonus_score = 0.0
+    for pref_skill in preferred_skills:
+        skill_name = pref_skill.get("name", "").lower().strip()
+        if skill_name in cv_skills_lower:
+            bonus_score += 10 * pref_skill.get("weight", 0.5)
 
-    score = (len(matched) / len(required_set)) * 100
+    final_skill_score = min(120, base_skill_score + bonus_score)
+    return round(final_skill_score, 2)
 
-    return {
-        "score": round(score, 2),
-        "matched_skills": list(matched),
-        "missing_skills": list(required_set - candidate_set)
-    }
+def calculate_experience_score(cv_yoe: int, jd_min_yoe: int) -> float:
+    if jd_min_yoe == 0:
+        return 100.0
+        
+    if cv_yoe >= jd_min_yoe:
+        bonus = min((cv_yoe - jd_min_yoe) * 5, 10) 
+        return 100.0 + bonus
+    else:
+        ratio = cv_yoe / jd_min_yoe
+        return round(ratio * 100, 2)
 
 def calculate_nlp_similarity(cv_text: str, jd_text: str) -> float:
     if not cv_text or not jd_text:
         return 0.0
-
-    vectorizer = TfidfVectorizer(stop_words='english')
-
+        
     try:
-        tfidf_matrix = vectorizer.fit_transform([cv_text, jd_text])
-        similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
-        return round(similarity * 100, 2)
+        tfidf_matrix = tfidf_vectorizer.fit_transform([cv_text, jd_text])
+        similarity_score = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+        return round(float(similarity_score) * 100, 2)
     except Exception as e:
-        print(f"Lỗi khi chạy TF-IDF: {e}")
+        logger.error(f"Lỗi khi tính TF-IDF: {str(e)}")
         return 0.0
+
+def score_cv(cv_data: dict, jd_data: dict) -> dict:
+    jd_required_skills = jd_data.get("required_skills", [])
+    jd_preferred_skills = jd_data.get("preferred_skills", [])
+    jd_min_yoe = jd_data.get("min_yoe", 0)
+    jd_search_text = jd_data.get("jd_search_text", "")
+
+    cv_text = cv_data.get("raw_text", "")
+    cv_skills = set(cv_data.get("skills", []))
+    cv_yoe = cv_data.get("years_of_experience", 0)
+
+    skill_score = calculate_skill_score(cv_skills, jd_required_skills, jd_preferred_skills)
+    experience_score = calculate_experience_score(cv_yoe, jd_min_yoe)
+    nlp_score = calculate_nlp_similarity(cv_text, jd_search_text)
+
+    WEIGHT_SKILL = 0.45
+    WEIGHT_EXP = 0.25
+    WEIGHT_NLP = 0.30
+
+    total_score = (skill_score * WEIGHT_SKILL) + (experience_score * WEIGHT_EXP) + (nlp_score * WEIGHT_NLP)
+
+    return {
+        "total_score": round(total_score, 2),
+        "score_breakdown": {
+            "skills_score": skill_score,
+            "experience_score": experience_score,
+            "nlp_score": nlp_score
+        },
+        "matched_skills": list(cv_skills.intersection({s.get("name", "").lower() for s in jd_required_skills + jd_preferred_skills})),
+        "missing_required_skills": list({s.get("name", "").lower() for s in jd_required_skills}.difference(cv_skills))
+    }
