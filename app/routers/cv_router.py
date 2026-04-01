@@ -44,6 +44,7 @@ async def upload_and_score_cv(
     cv_data["filename"] = file.filename
 
     candidate_email = cv_data.get("email")
+    
     if candidate_email:
         existing_cv = await db["hr_cvs"].find_one({
             "job_id": job_id, 
@@ -51,6 +52,14 @@ async def upload_and_score_cv(
         })
         if existing_cv:
             raise HTTPException(status_code=400, detail=f"Ứng viên có email {candidate_email} đã được tải lên trong chiến dịch này rồi!")
+    
+    else:
+        existing_cv_by_name = await db["hr_cvs"].find_one({
+            "job_id": job_id,
+            "filename": file.filename
+        })
+        if existing_cv_by_name:
+            raise HTTPException(status_code=400, detail=f"Hồ sơ '{file.filename}' dường như đã tồn tại trong chiến dịch này (Không tìm thấy email để xác thực thêm).")
 
     scoring_result = score_cv(cv_data, jd_data)
 
@@ -91,16 +100,15 @@ async def update_cv_status_and_notes(
     
     try:
         filter_query = {"_id": ObjectId(cv_id), "hr_email": current_hr} 
+        update_query = {"$set": {}}
         
-        update_query = {}
-        
-        if update_data.status:
-            update_query.setdefault("$set", {})["status"] = update_data.status
+        if update_data.status is not None:
+            update_query["$set"]["status"] = update_data.status
             
-        if update_data.note:
-            update_query.setdefault("$push", {})["notes"] = update_data.note
+        if update_data.note is not None:
+            update_query["$set"]["note"] = update_data.note
             
-        if not update_query:
+        if not update_query["$set"]:
             return {"message": "Không có dữ liệu mới nào để cập nhật"}
 
         result = await db["hr_cvs"].update_one(filter_query, update_query) 
@@ -115,3 +123,47 @@ async def update_cv_status_and_notes(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi khi cập nhật CV: {str(e)}")
+    
+@router.delete("/{cv_id}")
+async def delete_cv(
+    cv_id: str, 
+    current_hr: str = Depends(get_current_user)
+):
+    db = get_db()
+    try:
+        result = await db["hr_cvs"].delete_one({
+            "_id": ObjectId(cv_id), 
+            "hr_email": current_hr
+        })
+        
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Không tìm thấy CV hoặc bạn không có quyền xóa!")
+            
+        return {"status": "success", "message": "Đã xóa hồ sơ ứng viên vĩnh viễn"}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi hệ thống: {str(e)}")
+    
+@router.get("/all")
+async def get_all_cvs(current_hr: str = Depends(get_current_user)):
+    db = get_db()
+    try:
+        cursor = db["hr_cvs"].find({"hr_email": current_hr}).sort("created_at", -1)
+        cvs = await cursor.to_list(length=500)
+        
+        for cv in cvs:
+            cv["id"] = str(cv["_id"])
+            del cv["_id"]
+            
+            job = await db["hr_jobs"].find_one({"_id": ObjectId(cv["job_id"])})
+            if job:
+                cv["job_title"] = job["title"]
+                cv["job_deadline"] = job.get("deadline") 
+            else:
+                cv["job_title"] = "Chiến dịch đã xóa"
+                cv["job_deadline"] = None
+            
+        return cvs
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi khi tải kho hồ sơ: {str(e)}")
