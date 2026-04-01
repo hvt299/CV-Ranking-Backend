@@ -108,12 +108,35 @@ async def get_job_ranking(job_id: str, current_hr: str = Depends(get_current_use
         cv["id"] = str(cv["_id"])
         del cv["_id"]
         
+    job["id"] = str(job["_id"])
+    del job["_id"]
+    
     return {
-        "job_info": {
-            "title": job.get("title"),
-            "company": job.get("company_name"),
-            "status": job.get("status")
-        },
+        "job_info": job,
         "total_candidates": len(cvs),
         "leaderboard": cvs
+    }
+
+@router.get("/dashboard/analytics")
+async def get_dashboard_analytics(current_hr: str = Depends(get_current_user)):
+    db = get_db()
+    
+    total_jobs = await db["hr_jobs"].count_documents({"created_by": current_hr})
+    open_jobs = await db["hr_jobs"].count_documents({"created_by": current_hr, "status": "open"})
+    
+    total_cvs = await db["hr_cvs"].count_documents({"hr_email": current_hr})
+    
+    pipeline = [
+        {"$match": {"hr_email": current_hr}},
+        {"$group": {"_id": "$status", "count": {"$sum": 1}}}
+    ]
+    status_counts = await db["hr_cvs"].aggregate(pipeline).to_list(length=None)
+    
+    status_breakdown = {item["_id"] if item["_id"] else "Mới": item["count"] for item in status_counts}
+    
+    return {
+        "total_jobs": total_jobs,
+        "open_jobs": open_jobs,
+        "total_cvs": total_cvs,
+        "status_breakdown": status_breakdown
     }
