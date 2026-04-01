@@ -89,6 +89,31 @@ async def delete_job(job_id: str, current_hr: str = Depends(get_current_user)):
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Không tìm thấy Job hoặc bạn không có quyền xóa")
         
-    await db["cvs"].delete_many({"job_id": job_id})
+    await db["hr_cvs"].delete_many({"job_id": job_id})
     
     return {"status": "success", "message": "Đã xóa chiến dịch và toàn bộ CV liên quan"}
+
+@router.get("/{job_id}/ranking")
+async def get_job_ranking(job_id: str, current_hr: str = Depends(get_current_user)):
+    db = get_db()
+    
+    job = await db["hr_jobs"].find_one({"_id": ObjectId(job_id), "created_by": current_hr})
+    if not job:
+        raise HTTPException(status_code=404, detail="Không tìm thấy chiến dịch")
+
+    cursor = db["hr_cvs"].find({"job_id": job_id}).sort("ai_score.total_score", -1)
+    cvs = await cursor.to_list(length=200)
+    
+    for cv in cvs:
+        cv["id"] = str(cv["_id"])
+        del cv["_id"]
+        
+    return {
+        "job_info": {
+            "title": job.get("title"),
+            "company": job.get("company_name"),
+            "status": job.get("status")
+        },
+        "total_candidates": len(cvs),
+        "leaderboard": cvs
+    }

@@ -9,6 +9,7 @@ from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
 from app.auth import get_current_user
 
 router = APIRouter(prefix="/api/v1/cv", tags=["CV Processing"])
+MAX_FILE_SIZE = 5 * 1024 * 1024
 
 @router.post("/upload")
 async def upload_and_score_cv(
@@ -27,6 +28,9 @@ async def upload_and_score_cv(
         raise HTTPException(status_code=404, detail="Không tìm thấy chiến dịch tuyển dụng này")
 
     content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="Dung lượng file vượt quá 5MB giới hạn")
+    
     try:
         raw_text = await extract_text(file, content)
     except Exception as e:
