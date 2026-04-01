@@ -17,8 +17,6 @@ import logging
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SKILLS_FILE_PATH = os.path.join(BASE_DIR, "data", "skills.csv")
 
-tfidf_vectorizer = TfidfVectorizer(stop_words='english')
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -183,38 +181,83 @@ def calculate_nlp_similarity(cv_text: str, jd_text: str) -> float:
         return 0.0
         
     try:
-        tfidf_matrix = tfidf_vectorizer.fit_transform([cv_text, jd_text])
+        local_vectorizer = TfidfVectorizer(stop_words='english')
+        tfidf_matrix = local_vectorizer.fit_transform([cv_text, jd_text])
         similarity_score = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
         return round(float(similarity_score) * 100, 2)
     except Exception as e:
         logger.error(f"Lỗi khi tính TF-IDF: {str(e)}")
         return 0.0
 
+def calculate_education_score(cv_edu: str, jd_min_edu: str) -> float:
+    if not jd_min_edu or jd_min_edu.lower() == "không yêu cầu":
+        return 100.0
+
+    edu_ranks = {
+        "không đề cập": 0,
+        "chứng chỉ nghề": 1,
+        "trung học phổ thông": 1,
+        "trung cấp": 2,
+        "cao đẳng": 3,
+        "cao đẳng (college)": 3,
+        "cử nhân": 4,
+        "cử nhân/kỹ sư (bachelor)": 4,
+        "thạc sĩ": 5,
+        "thạc sĩ (master)": 5,
+        "tiến sĩ": 6,
+        "tiến sĩ (phd)": 6
+    }
+
+    cv_rank = edu_ranks.get(cv_edu.lower().strip(), 0)
+    jd_rank = edu_ranks.get(jd_min_edu.lower().strip(), 0)
+
+    if jd_rank == 0:
+        return 100.0
+
+    if cv_rank >= jd_rank:
+        return 100.0
+    else:
+        return round((cv_rank / jd_rank) * 100, 2)
+
 def score_cv(cv_data: dict, jd_data: dict) -> dict:
     jd_required_skills = jd_data.get("required_skills", [])
     jd_preferred_skills = jd_data.get("preferred_skills", [])
     jd_min_yoe = jd_data.get("min_yoe", 0)
     jd_search_text = jd_data.get("jd_search_text", "")
+    
+    jd_education = jd_data.get("education", {})
+    jd_min_edu = jd_education.get("min_level", "Không yêu cầu")
 
     cv_text = cv_data.get("raw_text", "")
     cv_skills = set(cv_data.get("skills", []))
     cv_yoe = cv_data.get("years_of_experience", 0)
+    cv_edu = cv_data.get("education_level", "Không đề cập")
 
     skill_score = calculate_skill_score(cv_skills, jd_required_skills, jd_preferred_skills)
     experience_score = calculate_experience_score(cv_yoe, jd_min_yoe)
+    education_score = calculate_education_score(cv_edu, jd_min_edu)
     nlp_score = calculate_nlp_similarity(cv_text, jd_search_text)
 
-    WEIGHT_SKILL = 0.45
-    WEIGHT_EXP = 0.25
+    WEIGHT_SKILL = 0.40
     WEIGHT_NLP = 0.30
+    WEIGHT_EXP = 0.20
+    WEIGHT_EDU = 0.10
 
-    total_score = (skill_score * WEIGHT_SKILL) + (experience_score * WEIGHT_EXP) + (nlp_score * WEIGHT_NLP)
+    total_score = (
+        (skill_score * WEIGHT_SKILL) + 
+        (experience_score * WEIGHT_EXP) + 
+        (education_score * WEIGHT_EDU) + 
+        (nlp_score * WEIGHT_NLP)
+    )
+
+    total_score = min(100.0, total_score)
 
     return {
         "total_score": round(total_score, 2),
         "score_breakdown": {
             "skills_score": skill_score,
             "experience_score": experience_score,
+            "education_score": education_score,
             "nlp_score": nlp_score
         },
         "matched_skills": list(cv_skills.intersection({s.get("name", "").lower() for s in jd_required_skills + jd_preferred_skills})),
