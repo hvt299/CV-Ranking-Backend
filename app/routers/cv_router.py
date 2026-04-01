@@ -115,3 +115,23 @@ async def update_cv_status_and_notes(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi khi cập nhật CV: {str(e)}")
+    
+@router.delete("/{cv_id}")
+async def delete_cv(
+    cv_id: str, 
+    current_hr: str = Depends(get_current_user)
+):
+    db = get_db()
+    try:
+        result = await db["hr_cvs"].delete_one({
+            "_id": ObjectId(cv_id), 
+            "hr_email": current_hr
+        })
+        
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Không tìm thấy CV hoặc bạn không có quyền xóa!")
+            
+        return {"status": "success", "message": "Đã xóa hồ sơ ứng viên vĩnh viễn"}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi hệ thống: {str(e)}")

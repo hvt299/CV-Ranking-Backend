@@ -108,12 +108,11 @@ async def get_job_ranking(job_id: str, current_hr: str = Depends(get_current_use
         cv["id"] = str(cv["_id"])
         del cv["_id"]
         
+    job["id"] = str(job["_id"])
+    del job["_id"]
+    
     return {
-        "job_info": {
-            "title": job.get("title"),
-            "company": job.get("company_name"),
-            "status": job.get("status")
-        },
+        "job_info": job,
         "total_candidates": len(cvs),
         "leaderboard": cvs
     }
