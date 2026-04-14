@@ -7,6 +7,7 @@ from app.database.config import get_db
 from app.database.models import CVUpdate
 
 from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
+from app.services.vector_engine import compress_cv_data, get_embedding
 from app.auth import get_current_user
 
 router = APIRouter(prefix="/api/v1/cv", tags=["CV Processing & Talent Pool"])
@@ -49,11 +50,15 @@ async def upload_cv_to_pool(
                 "candidate_email": candidate_email,
                 "is_existing": True
             }
+        
+    compressed_text = compress_cv_data(cv_data, cv_data.get("skills", []))
+    cv_vector = get_embedding(compressed_text)
     
     pool_record = {
         "hr_email": current_hr,
         "filename": file.filename,
         "raw_text": raw_text,
+        "cv_vector": cv_vector,
         "candidate_info": {
             "email": cv_data.get("email"),
             "phone": cv_data.get("phone"),
@@ -124,11 +129,11 @@ async def map_cv_to_job(
         raise HTTPException(status_code=400, detail="Hồ sơ này đã được đưa vào chiến dịch này rồi!")
 
     cv_data_for_scoring = {
-        "raw_text": cv_record.get("raw_text", ""),
         "skills": cv_record.get("extracted_skills", []),
         "years_of_experience": cv_record["candidate_info"].get("years_of_experience", 0),
         "skill_experience": cv_record["candidate_info"].get("skill_experience", {}),
-        "education_level": cv_record["candidate_info"].get("education_level", "Không đề cập")
+        "education_level": cv_record["candidate_info"].get("education_level", "Không đề cập"),
+        "cv_vector": cv_record.get("cv_vector", [])
     }
 
     scoring_result = score_cv(cv_data_for_scoring, jd_data)

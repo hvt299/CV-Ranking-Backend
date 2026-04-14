@@ -10,8 +10,7 @@ import docx
 from fastapi import UploadFile, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from app.services.vector_engine import calculate_cosine_similarity
 import logging
 
 from datetime import datetime
@@ -288,19 +287,6 @@ def calculate_experience_score(cv_yoe: int, jd_min_yoe: int) -> float:
         ratio = cv_yoe / jd_min_yoe
         return round(ratio * 100, 2)
 
-def calculate_nlp_similarity(cv_text: str, jd_text: str) -> float:
-    if not cv_text or not jd_text:
-        return 0.0
-        
-    try:
-        local_vectorizer = TfidfVectorizer(stop_words='english')
-        tfidf_matrix = local_vectorizer.fit_transform([cv_text, jd_text])
-        similarity_score = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
-        return round(float(similarity_score) * 100, 2)
-    except Exception as e:
-        logger.error(f"Lỗi khi tính TF-IDF: {str(e)}")
-        return 0.0
-
 def calculate_education_score(cv_edu: str, jd_min_edu: str) -> float:
     if not jd_min_edu or jd_min_edu.lower() == "không yêu cầu":
         return 100.0
@@ -335,21 +321,23 @@ def score_cv(cv_data: dict, jd_data: dict) -> dict:
     jd_required_skills = jd_data.get("required_skills", [])
     jd_preferred_skills = jd_data.get("preferred_skills", [])
     jd_min_yoe = jd_data.get("min_yoe", 0)
-    jd_search_text = jd_data.get("jd_search_text", "")
     
     jd_education = jd_data.get("education", {})
     jd_min_edu = jd_education.get("min_level", "Không yêu cầu")
 
-    cv_text = cv_data.get("raw_text", "")
     cv_skills = set(cv_data.get("skills", []))
     cv_skill_exp = cv_data.get("skill_experience", {})
     cv_yoe = cv_data.get("years_of_experience", 0)
     cv_edu = cv_data.get("education_level", "Không đề cập")
 
+    jd_vector = jd_data.get("jd_vector", [])
+    cv_vector = cv_data.get("cv_vector", [])
+
     skill_score, matched_skills, missing_required_skills = calculate_skill_score(cv_skills, cv_skill_exp, jd_required_skills, jd_preferred_skills)
     experience_score = calculate_experience_score(cv_yoe, jd_min_yoe)
     education_score = calculate_education_score(cv_edu, jd_min_edu)
-    nlp_score = calculate_nlp_similarity(cv_text, jd_search_text)
+    
+    nlp_score = calculate_cosine_similarity(cv_vector, jd_vector)
 
     WEIGHT_SKILL = 0.40
     WEIGHT_NLP = 0.30

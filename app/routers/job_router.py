@@ -7,6 +7,7 @@ from app.auth import get_current_user
 from app.database.config import get_db
 from app.database.models import JobCreateEnterprise, JobResponse
 from app.services.nlp_engine import score_cv
+from app.services.vector_engine import compress_jd_data, get_embedding
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["Job Management & Ranking"])
 
@@ -22,11 +23,11 @@ async def rescore_all_applications_for_job(job_id: str, jd_data: dict, current_h
             continue
             
         cv_data_for_scoring = {
-            "raw_text": cv_record.get("raw_text", ""),
             "skills": cv_record.get("extracted_skills", []),
             "years_of_experience": cv_record["candidate_info"].get("years_of_experience", 0),
             "skill_experience": cv_record["candidate_info"].get("skill_experience", {}),
-            "education_level": cv_record["candidate_info"].get("education_level", "Không đề cập")
+            "education_level": cv_record["candidate_info"].get("education_level", "Không đề cập"),
+            "cv_vector": cv_record.get("cv_vector", [])
         }
         
         new_score = score_cv(cv_data_for_scoring, jd_data)
@@ -41,13 +42,18 @@ async def rescore_all_applications_for_job(job_id: str, jd_data: dict, current_h
 async def create_job(job: JobCreateEnterprise, current_hr: str = Depends(get_current_user)):
     db = get_db()
     job_dict = job.model_dump()
+
+    compressed_jd = compress_jd_data(job_dict)
+    jd_vector = get_embedding(compressed_jd)
+    
     jd_search_text = f"{job.description} {job.requirements} {job.benefits or ''} {job.other_info or ''}".lower()
     
     job_dict.update({
         "created_by": current_hr,
         "created_at": datetime.now(timezone.utc),
         "status": "open",
-        "jd_search_text": jd_search_text
+        "jd_search_text": jd_search_text,
+        "jd_vector": jd_vector
     })
     
     result = await db["hr_jobs"].insert_one(job_dict)
@@ -84,8 +90,16 @@ async def update_job(
         raise HTTPException(status_code=404, detail="Không tìm thấy Job hoặc bạn không có quyền chỉnh sửa")
 
     update_data = job_update.model_dump()
+
+    compressed_jd = compress_jd_data(update_data)
+    new_jd_vector = get_embedding(compressed_jd)
+
     jd_search_text = f"{job_update.description} {job_update.requirements} {job_update.benefits or ''} {job_update.other_info or ''}".lower()
-    update_data.update({"updated_at": datetime.now(timezone.utc), "jd_search_text": jd_search_text})
+    update_data.update({
+        "updated_at": datetime.now(timezone.utc), 
+        "jd_search_text": jd_search_text,
+        "jd_vector": new_jd_vector
+    })
 
     await db["hr_jobs"].update_one({"_id": ObjectId(job_id)}, {"$set": update_data})
     
