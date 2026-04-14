@@ -14,6 +14,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import logging
 
+from datetime import datetime
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SKILLS_FILE_PATH = os.path.join(BASE_DIR, "data", "skills.csv")
 
@@ -74,40 +76,111 @@ def extract_basic_info(text: str) -> Dict:
     phone = None
     if phone_match:
         phone = re.sub(r"[ .-]", "", phone_match.group(0))
-    github = re.search(r"(https?://)?(www\.)?github\.com/[A-Za-z0-9_-]+", text)
 
     return {
         "email": email.group(0) if email else None,
-        "phone": phone,
-        "github": github.group(0) if github else None,
+        "phone": phone
     }
 
-def remove_duplicate_semantic(skills: list) -> list:
-    skills_sorted = sorted(skills, key=len, reverse=True)
-    filtered = []
-    for skill in skills_sorted:
-        if not any(skill.lower() in s.lower() for s in filtered):
-            filtered.append(skill)
-    return filtered
+def extract_social_links(text: str) -> dict:
+    links = {
+        "github": None,
+        "linkedin": None,
+        "portfolio": []
+    }
 
-def extract_years_of_experience(text: str) -> float:
+    url_pattern = r'(?:https?:\/\/)?(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{2,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)'
+    
+    matches = re.finditer(url_pattern, text.lower())
+
+    for match in matches:
+        url = match.group(0).rstrip('.,;)]')
+
+        if '@' in url and not url.startswith('http'):
+            continue
+            
+        if 'topcv.vn' in url or len(url) < 8:
+            continue
+
+        if 'github.com' in url or 'gitlab.com' in url:
+            if not links['github']:
+                links['github'] = url
+        elif 'linkedin.com' in url:
+            if not links['linkedin']:
+                links['linkedin'] = url
+        else:
+            if url not in links['portfolio']:
+                links['portfolio'].append(url)
+
+    return links
+
+def extract_years_of_experience(text: str) -> Tuple[float, Dict[str, float]]:
     text_lower = text.lower()
     
     pattern1 = r"(\d+(?:\.\d+)?)\s*(?:\+)?\s*(?:năm|years?)\s*(?:kinh nghiệm|kinh nghiem|of experience|experience|exp)"
     pattern2 = r"(?:kinh nghiệm|kinh nghiem|experience|exp).{0,20}?(\d+(?:\.\d+)?)\s*(?:năm|years?)"
-
-    yoe = 0.0
     
+    yoe_explicit = 0.0
     for pattern in [pattern1, pattern2]:
         matches = re.findall(pattern, text_lower)
         if matches:
             numbers = [float(m) for m in matches]
-            yoe = max(max(numbers), yoe)
+            yoe_explicit = max(max(numbers), yoe_explicit)
+
+    lines = text_lower.split('\n')
+    date_pattern = r"(?:0?[1-9]|1[0-2])?[/.-]?20\d{2}\s*[-–~]?\s*(?:nay|present|hiện tại|(?:0?[1-9]|1[0-2])?[/.-]?20\d{2})"
+    
+    total_years_inferred = 0.0
+    current_year = datetime.now().year
+    edu_keywords = ["đại học", "học viện", "cao đẳng", "thạc sĩ", "tiến sĩ", "university", "college", "school", "gpa"]
+    
+    skill_experience = {} 
+    
+    for i, line in enumerate(lines):
+        matches = re.finditer(date_pattern, line)
+        for match in matches:
+            is_education = False
+            start_check = max(0, i - 2)
+            end_check = min(len(lines), i + 3)
+            context_text = " ".join(lines[start_check:end_check])
             
-    if yoe > 40:
-        return 0.0
-        
-    return round(yoe, 1)
+            for edu_kw in edu_keywords:
+                if edu_kw in context_text:
+                    is_education = True
+                    break
+                    
+            if is_education:
+                continue
+                
+            matched_str = match.group(0)
+            years = re.findall(r"20\d{2}", matched_str)
+            start_year = end_year = 0
+            
+            if len(years) == 2:
+                start_year = int(years[0])
+                end_year = int(years[1])
+            elif len(years) == 1 and any(w in matched_str for w in ['nay', 'present', 'hiện tại']):
+                start_year = int(years[0])
+                end_year = current_year
+            else:
+                continue
+                
+            if 1950 <= start_year <= end_year <= current_year:
+                dur = end_year - start_year
+                if dur == 0:
+                    dur = 0.5
+                
+                total_years_inferred += dur
+                
+                job_context_text = " ".join(lines[max(0, i - 1) : min(len(lines), i + 6)])
+                local_skills = extract_skills(job_context_text)
+                
+                for skill in local_skills:
+                    skill_experience[skill] = skill_experience.get(skill, 0.0) + dur
+
+    final_total_yoe = max(yoe_explicit, total_years_inferred)
+                
+    return min(round(final_total_yoe, 1), 40.0), skill_experience
 
 def extract_education_level(text: str) -> str:
     text_lower = text.lower()
@@ -128,42 +201,63 @@ def extract_education_level(text: str) -> str:
 def analyze_cv_text(text: str) -> Dict:
     info = extract_basic_info(text)
     skills = extract_skills(text)
-    skills = remove_duplicate_semantic(skills)
-    yoe = extract_years_of_experience(text)
+    yoe, skill_experience = extract_years_of_experience(text) 
     edu_level = extract_education_level(text)
+    social_links = extract_social_links(text)
 
     return {
         **info,
         "skills": skills,
         "skill_count": len(skills),
         "years_of_experience": yoe,
-        "education_level": edu_level
+        "skill_experience": skill_experience,
+        "education_level": edu_level,
+        "github": social_links["github"],
+        "linkedin": social_links["linkedin"],
+        "portfolio": social_links["portfolio"],
     }
 
-def calculate_skill_score(cv_skills: Set[str], required_skills: List[dict], preferred_skills: List[dict]) -> float:
-    if not required_skills and not preferred_skills:
-        return 0.0
+def get_normalized_skill(raw_skill: str) -> str:
+    raw_lower = raw_skill.lower().strip()
+    for root, variants in SKILL_MAP.items():
+        if raw_lower == root or raw_lower in variants:
+            return root
+    return raw_lower
 
-    cv_skills_lower = {skill.lower().strip() for skill in cv_skills}
+def calculate_skill_score(cv_skills: set, jd_required: list, jd_preferred: list):
+    score = 0.0
+    total_weight = sum(s.get('weight', 1.0) for s in jd_required) + sum(s.get('weight', 0.5) for s in jd_preferred)
     
-    total_required_weight = sum(skill.get("weight", 0.5) for skill in required_skills)
-    earned_required_score = 0.0
+    if total_weight == 0:
+        return 100.0, list(cv_skills), []
+
+    matched_skills = []
+    missing_required_skills = []
+
+    for req in jd_required:
+        raw_name = req.get('name', '')
+        weight = req.get('weight', 1.0)
+        
+        norm_name = get_normalized_skill(raw_name)
+
+        if norm_name in cv_skills:
+            score += weight
+            matched_skills.append(raw_name) 
+        else:
+            missing_required_skills.append(raw_name)
+
+    for pref in jd_preferred:
+        raw_name = pref.get('name', '')
+        weight = pref.get('weight', 0.5)
+        norm_name = get_normalized_skill(raw_name)
+
+        if norm_name in cv_skills:
+            score += weight
+            matched_skills.append(raw_name)
+
+    final_score = (score / total_weight) * 100 if total_weight > 0 else 0
     
-    for req_skill in required_skills:
-        skill_name = req_skill.get("name", "").lower().strip()
-        if skill_name in cv_skills_lower:
-            earned_required_score += req_skill.get("weight", 0.5)
-            
-    base_skill_score = (earned_required_score / total_required_weight) * 100 if total_required_weight > 0 else 0
-
-    bonus_score = 0.0
-    for pref_skill in preferred_skills:
-        skill_name = pref_skill.get("name", "").lower().strip()
-        if skill_name in cv_skills_lower:
-            bonus_score += 10 * pref_skill.get("weight", 0.5)
-
-    final_skill_score = min(120, base_skill_score + bonus_score)
-    return round(final_skill_score, 2)
+    return round(final_score, 2), matched_skills, missing_required_skills
 
 def calculate_experience_score(cv_yoe: int, jd_min_yoe: int) -> float:
     if jd_min_yoe == 0:
@@ -233,7 +327,7 @@ def score_cv(cv_data: dict, jd_data: dict) -> dict:
     cv_yoe = cv_data.get("years_of_experience", 0)
     cv_edu = cv_data.get("education_level", "Không đề cập")
 
-    skill_score = calculate_skill_score(cv_skills, jd_required_skills, jd_preferred_skills)
+    skill_score, matched_skills, missing_required_skills = calculate_skill_score(cv_skills, jd_required_skills, jd_preferred_skills)
     experience_score = calculate_experience_score(cv_yoe, jd_min_yoe)
     education_score = calculate_education_score(cv_edu, jd_min_edu)
     nlp_score = calculate_nlp_similarity(cv_text, jd_search_text)
@@ -260,6 +354,6 @@ def score_cv(cv_data: dict, jd_data: dict) -> dict:
             "education_score": education_score,
             "nlp_score": nlp_score
         },
-        "matched_skills": list(cv_skills.intersection({s.get("name", "").lower() for s in jd_required_skills + jd_preferred_skills})),
-        "missing_required_skills": list({s.get("name", "").lower() for s in jd_required_skills}.difference(cv_skills))
+        "matched_skills": matched_skills,
+        "missing_required_skills": missing_required_skills
     }
