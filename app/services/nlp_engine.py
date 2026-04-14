@@ -224,7 +224,7 @@ def get_normalized_skill(raw_skill: str) -> str:
             return root
     return raw_lower
 
-def calculate_skill_score(cv_skills: set, jd_required: list, jd_preferred: list):
+def calculate_skill_score(cv_skills: set, cv_skill_exp: dict, jd_required: list, jd_preferred: list):
     score = 0.0
     total_weight = sum(s.get('weight', 1.0) for s in jd_required) + sum(s.get('weight', 0.5) for s in jd_preferred)
     
@@ -234,28 +234,46 @@ def calculate_skill_score(cv_skills: set, jd_required: list, jd_preferred: list)
     matched_skills = []
     missing_required_skills = []
 
-    for req in jd_required:
-        raw_name = req.get('name', '')
-        weight = req.get('weight', 1.0)
+    def evaluate_skill(skill_dict, default_weight):
+        raw_name = skill_dict.get('name', '')
+        weight = skill_dict.get('weight', default_weight)
+        req_years = skill_dict.get('min_years', 0)
         
         norm_name = get_normalized_skill(raw_name)
 
         if norm_name in cv_skills:
-            score += weight
+            cv_years = cv_skill_exp.get(norm_name, 0.0)
+            
+            if req_years > 0:
+                if cv_years >= req_years:
+                    bonus = min((cv_years - req_years) * 0.1, 0.2) * weight
+                    earned = weight + bonus
+                else:
+                    ratio = cv_years / req_years
+                    earned = weight * (0.5 + 0.5 * ratio) 
+            else:
+                earned = weight
+                
+            return earned, raw_name, True
+            
+        return 0.0, raw_name, False
+
+    for req in jd_required:
+        earned, raw_name, is_matched = evaluate_skill(req, 1.0)
+        if is_matched:
+            score += earned
             matched_skills.append(raw_name) 
         else:
             missing_required_skills.append(raw_name)
 
     for pref in jd_preferred:
-        raw_name = pref.get('name', '')
-        weight = pref.get('weight', 0.5)
-        norm_name = get_normalized_skill(raw_name)
-
-        if norm_name in cv_skills:
-            score += weight
+        earned, raw_name, is_matched = evaluate_skill(pref, 0.5)
+        if is_matched:
+            score += earned
             matched_skills.append(raw_name)
 
     final_score = (score / total_weight) * 100 if total_weight > 0 else 0
+    final_score = min(final_score, 110.0) 
     
     return round(final_score, 2), matched_skills, missing_required_skills
 
@@ -324,10 +342,11 @@ def score_cv(cv_data: dict, jd_data: dict) -> dict:
 
     cv_text = cv_data.get("raw_text", "")
     cv_skills = set(cv_data.get("skills", []))
+    cv_skill_exp = cv_data.get("skill_experience", {})
     cv_yoe = cv_data.get("years_of_experience", 0)
     cv_edu = cv_data.get("education_level", "Không đề cập")
 
-    skill_score, matched_skills, missing_required_skills = calculate_skill_score(cv_skills, jd_required_skills, jd_preferred_skills)
+    skill_score, matched_skills, missing_required_skills = calculate_skill_score(cv_skills, cv_skill_exp, jd_required_skills, jd_preferred_skills)
     experience_score = calculate_experience_score(cv_yoe, jd_min_yoe)
     education_score = calculate_education_score(cv_edu, jd_min_edu)
     nlp_score = calculate_nlp_similarity(cv_text, jd_search_text)
