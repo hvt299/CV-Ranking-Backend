@@ -12,6 +12,7 @@ from bson import ObjectId
 import os
 from pydantic import BaseModel
 import httpx
+from fastapi.security import OAuth2PasswordRequestForm
 
 router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
@@ -204,3 +205,18 @@ async def get_current_user_profile(email: str = Depends(get_current_user)):
         "full_name": user.get("full_name", "HR Manager"),
         "avatar": user.get("avatar", "")
     }
+
+@router.post("/docs-login", response_model=Token, include_in_schema=False)
+async def swagger_login(form_data: OAuth2PasswordRequestForm = Depends()):
+    db = get_db()
+    
+    user = await db["hr_users"].find_one({"email": form_data.username})
+    
+    if not user or not verify_password(form_data.password, user["hashed_password"]):
+        raise HTTPException(status_code=401, detail="Email hoặc mật khẩu không chính xác")
+        
+    if not user.get("is_verified", False):
+        raise HTTPException(status_code=401, detail="Vui lòng kiểm tra email để kích hoạt tài khoản!")
+    
+    access_token = create_access_token(data={"sub": user["email"]})
+    return {"access_token": access_token, "token_type": "bearer"}
