@@ -68,15 +68,18 @@ async def upload_and_score_cv(
         "hr_email": current_hr,
         "filename": file.filename,
         "candidate_info": {
-            "email": candidate_email,
+            "email": cv_data.get("email"),
             "phone": cv_data.get("phone"),
             "github": cv_data.get("github"),
+            "linkedin": cv_data.get("linkedin"),
+            "portfolio": cv_data.get("portfolio", []),
+            "skill_experience": cv_data.get("skill_experience", {}),
             "education_level": cv_data.get("education_level"),
-            "years_of_experience": cv_data.get("years_of_experience"),
+            "years_of_experience": cv_data.get("years_of_experience", 0)
         },
         "extracted_skills": cv_data.get("skills", []),
-        "ai_score": scoring_result, 
-        "status": "Mới", 
+        "ai_score": scoring_result,
+        "status": "Mới",
         "note": "",
         "created_at": datetime.now(timezone.utc)
     }
