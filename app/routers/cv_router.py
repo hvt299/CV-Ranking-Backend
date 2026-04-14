@@ -94,6 +94,24 @@ async def map_cv_to_job(
     if not jd_data:
         raise HTTPException(status_code=404, detail="Không tìm thấy chiến dịch tuyển dụng")
 
+    deadline = jd_data.get("deadline")
+    if deadline:
+        now_utc = datetime.now(timezone.utc)
+        
+        if isinstance(deadline, str):
+            deadline_dt = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+        else:
+            deadline_dt = deadline
+        
+        if deadline_dt.tzinfo is None:
+            deadline_dt = deadline_dt.replace(tzinfo=timezone.utc)
+            
+        if now_utc > deadline_dt:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Chiến dịch đã hết hạn vào {deadline_dt.strftime('%d/%m/%Y %H:%M')} (UTC)"
+            )
+        
     cv_record = await db["hr_cvs"].find_one({"_id": ObjectId(cv_id), "hr_email": current_hr})
     if not cv_record:
         raise HTTPException(status_code=404, detail="Không tìm thấy CV trong Kho hồ sơ")
@@ -193,5 +211,52 @@ async def get_talent_pool(current_hr: str = Depends(get_current_user)):
                 del cv["raw_text"]
                 
         return cvs
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/applications/{app_id}")
+async def remove_application_from_job(
+    app_id: str, 
+    current_hr: str = Depends(get_current_user)
+):
+    db = get_db()
+    try:
+        result = await db["hr_applications"].delete_one({
+            "_id": ObjectId(app_id), 
+            "hr_email": current_hr
+        })
+        
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển này")
+            
+        return {"status": "success", "message": "Đã gỡ CV khỏi chiến dịch thành công"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/applications/recent")
+async def get_recent_applications(current_hr: str = Depends(get_current_user)):
+    db = get_db()
+    try:
+        cursor = db["hr_applications"].find({"hr_email": current_hr}).sort("applied_at", -1).limit(100)
+        applications = await cursor.to_list(length=100)
+        
+        result = []
+        for app in applications:
+            app["id"] = str(app["_id"])
+            del app["_id"]
+            
+            cv = await db["hr_cvs"].find_one({"_id": ObjectId(app["cv_id"])})
+            if cv:
+                app["filename"] = cv.get("filename", "CV Ẩn")
+                app["candidate_email"] = cv.get("candidate_info", {}).get("email", "")
+            else:
+                app["filename"] = "CV Ẩn"
+                
+            job = await db["hr_jobs"].find_one({"_id": ObjectId(app["job_id"])})
+            app["job_title"] = job.get("title", "Chiến dịch đã xóa") if job else "Chiến dịch đã xóa"
+                
+            result.append(app)
+            
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
