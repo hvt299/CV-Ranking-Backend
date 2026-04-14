@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.database.config import connect_to_mongo, close_mongo_connection
 from app.routers import auth_router, cv_router, job_router
+from app.routers import admin_router, applicant_router
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
@@ -28,6 +29,8 @@ app.add_middleware(
 app.include_router(auth_router.router)
 app.include_router(cv_router.router)
 app.include_router(job_router.router)
+app.include_router(admin_router.router)
+app.include_router(applicant_router.router)
 
 @app.get("/", tags=["Health Check"])
 def root():

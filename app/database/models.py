@@ -77,12 +77,19 @@ class HRUserCreate(BaseModel):
     email: EmailStr
     full_name: str = Field(..., min_length=6, example="Trần Nam")
     password: str
+    role: str = Field(default="hr", example="hr hoặc applicant")
 
     @field_validator('password')
     def validate_password(cls, v):
-        pattern = r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$"
+        pattern = r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#+\-_=])[A-Za-z\d@$!%*?&#+\-_=]{8,}$"
         if not re.match(pattern, v):
             raise ValueError("Mật khẩu phải từ 8 ký tự, gồm ít nhất 1 chữ hoa, 1 chữ thường, 1 số và 1 ký tự đặc biệt.")
+        return v
+
+    @field_validator('role')
+    def validate_role(cls, v):
+        if v not in ("hr", "applicant"):
+            raise ValueError("Role phải là 'hr' hoặc 'applicant'.")
         return v
 
 class HRUserLogin(BaseModel):
@@ -96,6 +103,7 @@ class HRUserDB(BaseModel):
     hashed_password: str
     avatar: str
     original_avatar: str
+    role: str = Field(default="hr")
     is_verified: bool = Field(default=False)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
