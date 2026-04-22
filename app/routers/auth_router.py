@@ -34,6 +34,7 @@ async def register_hr(background_tasks: BackgroundTasks, user: HRUserCreate = Bo
         "hashed_password": hashed_pw,
         "avatar": auto_avatar,
         "original_avatar": auto_avatar,
+        "role": user.role,
         "is_verified": False,
         "created_at": datetime.now(timezone.utc)
     }
@@ -203,7 +204,8 @@ async def get_current_user_profile(email: str = Depends(get_current_user)):
     return {
         "email": user["email"],
         "full_name": user.get("full_name", "HR Manager"),
-        "avatar": user.get("avatar", "")
+        "avatar": user.get("avatar", ""),
+        "role": user.get("role", "hr")
     }
 
 @router.post("/docs-login", response_model=Token, include_in_schema=False)
