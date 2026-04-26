@@ -357,13 +357,24 @@ def score_cv(cv_data: dict, jd_data: dict) -> dict:
 
     total_score = min(100.0, total_score)
 
+    word_count = cv_data.get("word_count", 500) 
+    penalty_score = 0.0
+    
+    if word_count < 200:
+        penalty_score = 20.0
+    elif word_count < 300:
+        penalty_score = 10.0
+        
+    total_score = max(0.0, total_score - penalty_score)
+
     return {
         "total_score": round(total_score, 2),
         "score_breakdown": {
             "skills_score": skill_score,
             "experience_score": experience_score,
             "education_score": education_score,
-            "nlp_score": nlp_score
+            "nlp_score": nlp_score,
+            "penalty_score": penalty_score
         },
         "matched_skills": matched_skills,
         "missing_required_skills": missing_required_skills

@@ -133,7 +133,8 @@ async def map_cv_to_job(
         "years_of_experience": cv_record["candidate_info"].get("years_of_experience", 0),
         "skill_experience": cv_record["candidate_info"].get("skill_experience", {}),
         "education_level": cv_record["candidate_info"].get("education_level", "Không đề cập"),
-        "cv_vector": cv_record.get("cv_vector", [])
+        "cv_vector": cv_record.get("cv_vector", []),
+        "word_count": len((cv_record.get("raw_text", "") or "").split())
     }
 
     scoring_result = score_cv(cv_data_for_scoring, jd_data)

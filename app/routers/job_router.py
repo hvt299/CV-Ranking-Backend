@@ -27,7 +27,8 @@ async def rescore_all_applications_for_job(job_id: str, jd_data: dict, current_h
             "years_of_experience": cv_record["candidate_info"].get("years_of_experience", 0),
             "skill_experience": cv_record["candidate_info"].get("skill_experience", {}),
             "education_level": cv_record["candidate_info"].get("education_level", "Không đề cập"),
-            "cv_vector": cv_record.get("cv_vector", [])
+            "cv_vector": cv_record.get("cv_vector", []),
+            "word_count": len((cv_record.get("raw_text", "") or "").split())
         }
         
         new_score = score_cv(cv_data_for_scoring, jd_data)
