@@ -6,21 +6,37 @@ from dotenv import load_dotenv
 load_dotenv()
 COLAB_API_URL = os.getenv("COLAB_API_URL")
 
-def compress_cv_data(candidate_info: dict, extracted_skills: list) -> str:
+def compress_cv_data(raw_text: str, candidate_info: dict, extracted_skills: list) -> str:
     edu = candidate_info.get("education_level", "Không có thông tin học vấn")
     yoe = candidate_info.get("years_of_experience", 0)
     skills_str = ", ".join(extracted_skills) if extracted_skills else "Không có kỹ năng rõ ràng"
     
-    return f"Ứng viên trình độ {edu}, có {yoe} năm kinh nghiệm làm việc. Kỹ năng chuyên môn bao gồm: {skills_str}."
+    full_cv_context = (
+        f"Thông tin tóm tắt: Trình độ {edu}, {yoe} năm kinh nghiệm. Kỹ năng: {skills_str}.\n"
+        f"Chi tiết Hồ sơ:\n{raw_text}"
+    )
+    return full_cv_context
 
 def compress_jd_data(jd_data: dict) -> str:
     title = jd_data.get("title", "")
     yoe = jd_data.get("min_yoe", 0)
-    edu = jd_data.get("education", {}).get("min_level", "")
+    edu = jd_data.get("education", {}).get("min_level", "Không yêu cầu")
+    
     req_skills = [s.get("name") for s in jd_data.get("required_skills", [])]
     skills_str = ", ".join(req_skills) if req_skills else "Không yêu cầu kỹ năng cụ thể"
     
-    return f"Tuyển dụng vị trí {title}. Yêu cầu trình độ {edu}, tối thiểu {yoe} năm kinh nghiệm. Yêu cầu kỹ năng chuyên môn: {skills_str}."
+    desc = jd_data.get("description", "")
+    reqs = jd_data.get("requirements", "")
+    benefits = jd_data.get("benefits", "")
+    
+    full_jd_context = (
+        f"Vị trí tuyển dụng: {title}\n"
+        f"Yêu cầu tối thiểu: Trình độ {edu}, tối thiểu {yoe} năm kinh nghiệm. Kỹ năng: {skills_str}.\n"
+        f"Mô tả công việc:\n{desc}\n"
+        f"Yêu cầu chi tiết:\n{reqs}\n"
+        f"Quyền lợi:\n{benefits}"
+    )
+    return full_jd_context
 
 def get_embedding(text: str) -> list:
     if not COLAB_API_URL:
