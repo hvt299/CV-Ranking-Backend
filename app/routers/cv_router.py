@@ -51,7 +51,7 @@ async def upload_cv_to_pool(
                 "is_existing": True
             }
         
-    compressed_text = compress_cv_data(cv_data, cv_data.get("skills", []))
+    compressed_text = compress_cv_data(raw_text, cv_data, cv_data.get("skills", []))
     cv_vector = get_embedding(compressed_text)
     
     pool_record = {
@@ -134,7 +134,8 @@ async def map_cv_to_job(
         "skill_experience": cv_record["candidate_info"].get("skill_experience", {}),
         "education_level": cv_record["candidate_info"].get("education_level", "Không đề cập"),
         "cv_vector": cv_record.get("cv_vector", []),
-        "word_count": len((cv_record.get("raw_text", "") or "").split())
+        "word_count": len((cv_record.get("raw_text", "") or "").split()),
+        "raw_text": cv_record.get("raw_text", "")
     }
 
     scoring_result = score_cv(cv_data_for_scoring, jd_data)

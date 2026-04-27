@@ -68,7 +68,7 @@ def extract_skills(text: str) -> List[str]:
                 found.add(main)
                 break
 
-    return list(found)
+    return sorted(list(found))
 
 def extract_basic_info(text: str) -> Dict:
     email = re.search(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b", text)
@@ -95,6 +95,9 @@ def extract_social_links(text: str) -> dict:
 
     for match in matches:
         url = match.group(0).rstrip('.,;)]')
+
+        if url.endswith(('.js', '.ts', '.php', '.py', '.html', '.css', '.cpp')):
+            continue
 
         if '@' in url and not url.startswith('http'):
             continue
@@ -357,12 +360,23 @@ def score_cv(cv_data: dict, jd_data: dict) -> dict:
 
     total_score = min(100.0, total_score)
 
-    word_count = cv_data.get("word_count", 500) 
+    raw_text = cv_data.get("raw_text", "").lower()
+    eng_words = [" the ", " and ", " in ", " to ", " of ", " for ", " with "]
+    vie_words = [" và ", " của ", " trong ", " cho ", " với ", " tại ", " là ", " các ", " người "]
+
+    eng_count = sum(raw_text.count(w) for w in eng_words)
+    vie_count = sum(raw_text.count(w) for w in vie_words)
+    is_english = eng_count > vie_count
+
+    threshold_severe = 100 if is_english else 200
+    threshold_light = 150 if is_english else 300
+
+    word_count = cv_data.get("word_count") 
     penalty_score = 0.0
     
-    if word_count < 200:
+    if word_count < threshold_severe:
         penalty_score = 20.0
-    elif word_count < 300:
+    elif word_count < threshold_light:
         penalty_score = 10.0
         
     total_score = max(0.0, total_score - penalty_score)
