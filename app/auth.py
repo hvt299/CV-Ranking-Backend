@@ -45,3 +45,28 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         raise credentials_exception
         
     return email
+
+async def get_current_user_with_role(token: str = Depends(oauth2_scheme)):
+    """Trả về cả email và role của user"""
+    from app.database.config import get_db
+    
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Không thể xác thực thông tin (Token không hợp lệ hoặc đã hết hạn)",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except jwt.PyJWTError:
+        raise credentials_exception
+    
+    # Lấy thông tin user từ database để có role
+    db = get_db()
+    user = await db["hr_users"].find_one({"email": email})
+    if not user:
+        raise credentials_exception
+        
+    return {"email": email, "role": user.get("role", "hr")}

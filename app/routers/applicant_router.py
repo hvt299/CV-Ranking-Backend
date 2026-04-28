@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from bson import ObjectId
 from datetime import datetime, timezone
+from typing import List, Optional
+from pydantic import BaseModel
 
 from app.auth import get_current_user
 from app.database.config import get_db
@@ -9,6 +11,14 @@ from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
 router = APIRouter(prefix="/api/v1/apply", tags=["Applicant"])
 
 MAX_FILE_SIZE = 5 * 1024 * 1024
+
+class NotificationCreate(BaseModel):
+    title: str
+    message: str
+    type: str = "info"  # success, error, info, warning
+    job_title: Optional[str] = None
+    application_id: Optional[str] = None
+    application_status: Optional[str] = None
 
 async def require_applicant(current_user: str = Depends(get_current_user)):
     db = get_db()
@@ -163,3 +173,112 @@ async def my_applications(current_applicant: str = Depends(require_applicant)):
         a["id"] = str(a["_id"])
         del a["_id"]
     return apps
+
+# Notification endpoints
+@router.get("/notifications")
+async def get_notifications(current_applicant: str = Depends(require_applicant)):
+    """Lấy danh sách thông báo của ứng viên"""
+    db = get_db()
+    cursor = db["applicant_notifications"].find(
+        {"applicant_email": current_applicant}
+    ).sort("created_at", -1)
+    notifications = await cursor.to_list(length=100)
+    
+    for notification in notifications:
+        notification["id"] = str(notification["_id"])
+        del notification["_id"]
+    
+    return notifications
+
+@router.patch("/notifications/{notification_id}/read")
+async def mark_notification_read(
+    notification_id: str,
+    current_applicant: str = Depends(require_applicant)
+):
+    """Đánh dấu thông báo đã đọc"""
+    db = get_db()
+    
+    try:
+        result = await db["applicant_notifications"].update_one(
+            {
+                "_id": ObjectId(notification_id),
+                "applicant_email": current_applicant
+            },
+            {"$set": {"status": "read", "read_at": datetime.now(timezone.utc)}}
+        )
+        
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Không tìm thấy thông báo")
+            
+        return {"status": "success", "message": "Đã đánh dấu thông báo là đã đọc"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="ID thông báo không hợp lệ")
+
+@router.patch("/notifications/read-all")
+async def mark_all_notifications_read(current_applicant: str = Depends(require_applicant)):
+    """Đánh dấu tất cả thông báo đã đọc"""
+    db = get_db()
+    
+    result = await db["applicant_notifications"].update_many(
+        {
+            "applicant_email": current_applicant,
+            "status": "unread"
+        },
+        {"$set": {"status": "read", "read_at": datetime.now(timezone.utc)}}
+    )
+    
+    return {
+        "status": "success", 
+        "message": f"Đã đánh dấu {result.modified_count} thông báo là đã đọc"
+    }
+
+@router.delete("/notifications/{notification_id}")
+async def delete_notification(
+    notification_id: str,
+    current_applicant: str = Depends(require_applicant)
+):
+    """Xóa thông báo"""
+    db = get_db()
+    
+    try:
+        result = await db["applicant_notifications"].delete_one(
+            {
+                "_id": ObjectId(notification_id),
+                "applicant_email": current_applicant
+            }
+        )
+        
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Không tìm thấy thông báo")
+            
+        return {"status": "success", "message": "Đã xóa thông báo"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="ID thông báo không hợp lệ")
+
+# Helper function to create notifications
+async def create_notification(
+    applicant_email: str,
+    title: str,
+    message: str,
+    notification_type: str = "info",
+    job_title: Optional[str] = None,
+    application_id: Optional[str] = None,
+    application_status: Optional[str] = None
+):
+    """Tạo thông báo mới cho ứng viên"""
+    db = get_db()
+    
+    notification = {
+        "applicant_email": applicant_email,
+        "title": title,
+        "message": message,
+        "type": notification_type,
+        "status": "unread",
+        "job_title": job_title,
+        "application_id": application_id,
+        "application_status": application_status,
+        "created_at": datetime.now(timezone.utc)
+    }
+    
+    await db["applicant_notifications"].insert_one(notification)
+    return notification

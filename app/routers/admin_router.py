@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from bson import ObjectId
-from app.auth import get_current_user
+from app.auth import get_current_user, get_current_user_with_role
 from app.database.config import get_db
 import os
 
@@ -9,12 +9,10 @@ router = APIRouter(prefix="/api/v1/admin", tags=["Admin"])
 VALID_ROLES = ("hr", "applicant", "admin")
 BOOTSTRAP_SECRET = os.getenv("ADMIN_BOOTSTRAP_SECRET", "")
 
-async def require_admin(current_user: str = Depends(get_current_user)):
-    db = get_db()
-    user = await db["hr_users"].find_one({"email": current_user})
-    if not user or user.get("role") != "admin":
+async def require_admin(user_info: dict = Depends(get_current_user_with_role)):
+    if user_info["role"] != "admin":
         raise HTTPException(status_code=403, detail="Chỉ Admin mới có quyền thực hiện thao tác này")
-    return current_user
+    return user_info["email"]
 
 @router.post("/bootstrap")
 async def bootstrap_admin(body: dict):
