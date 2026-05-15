@@ -8,7 +8,7 @@ from app.database.models import CVUpdate
 
 from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
 from app.services.vector_engine import compress_cv_data, get_embedding
-from app.auth import get_current_user
+from app.auth import get_current_user, get_current_user_with_role
 
 router = APIRouter(prefix="/api/v1/cv", tags=["CV Processing & Talent Pool"])
 MAX_FILE_SIZE = 5 * 1024 * 1024
@@ -162,11 +162,24 @@ async def map_cv_to_job(
 async def update_application_status(
     app_id: str, 
     update_data: CVUpdate = Body(...),
-    current_hr: str = Depends(get_current_user)
+    user_info: dict = Depends(get_current_user_with_role)
 ):
     db = get_db()
+    current_hr = user_info["email"]
+    user_role = user_info["role"]
+    
     try:
-        filter_query = {"_id": ObjectId(app_id), "hr_email": current_hr} 
+        # Admin có thể update bất kỳ application nào, HR thường chỉ update applications của mình
+        if user_role == "admin":
+            filter_query = {"_id": ObjectId(app_id)}
+        else:
+            filter_query = {"_id": ObjectId(app_id), "hr_email": current_hr}
+        
+        # Get current application data before update
+        current_app = await db["hr_applications"].find_one(filter_query)
+        if not current_app:
+            raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển này")
+            
         update_query = {"$set": {}}
         
         if update_data.status is not None:
@@ -183,18 +196,80 @@ async def update_application_status(
         if result.matched_count == 0:
             raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển này")
 
+        # Create notification for applicant if status changed
+        if update_data.status is not None and update_data.status != current_app.get("status"):
+            # Get job and applicant info
+            job = await db["hr_jobs"].find_one({"_id": ObjectId(current_app["job_id"])})
+            cv = await db["hr_cvs"].find_one({"_id": ObjectId(current_app["cv_id"])})
+            
+            # Check if this is from applicant submission
+            applicant_submission = await db["applicant_submissions"].find_one({
+                "job_id": current_app["job_id"],
+                "applicant_email": {"$exists": True}
+            })
+            
+            if applicant_submission and job:
+                # Create notification for applicant
+                notification_title, notification_message, notification_type = get_notification_content(
+                    update_data.status, job.get("title", "Vị trí tuyển dụng")
+                )
+                
+                notification = {
+                    "applicant_email": applicant_submission["applicant_email"],
+                    "title": notification_title,
+                    "message": notification_message,
+                    "type": notification_type,
+                    "status": "unread",
+                    "job_title": job.get("title"),
+                    "application_id": str(current_app["_id"]),
+                    "application_status": update_data.status,
+                    "created_at": datetime.now(timezone.utc)
+                }
+                
+                await db["applicant_notifications"].insert_one(notification)
+                
+                # Also update the applicant_submissions status
+                await db["applicant_submissions"].update_one(
+                    {
+                        "job_id": current_app["job_id"],
+                        "applicant_email": applicant_submission["applicant_email"]
+                    },
+                    {"$set": {"status": update_data.status}}
+                )
+
         return {"status": "success", "message": "Đã cập nhật trạng thái ứng viên thành công"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def get_notification_content(status: str, job_title: str):
+    """Generate notification content based on application status"""
+    status_map = {
+        "Mới": ("Hồ sơ đã được tiếp nhận", f"Hồ sơ của bạn cho vị trí '{job_title}' đã được tiếp nhận và đang chờ xem xét.", "info"),
+        "Đang xem xét": ("Hồ sơ đang được xem xét", f"Hồ sơ của bạn cho vị trí '{job_title}' đang được HR xem xét kỹ lưỡng.", "info"),
+        "Phỏng vấn": ("Mời phỏng vấn", f"Chúc mừng! Bạn đã được mời phỏng vấn cho vị trí '{job_title}'. HR sẽ liên hệ với bạn sớm.", "success"),
+        "Đề nghị (Offer)": ("Đề nghị làm việc", f"Tuyệt vời! Bạn đã nhận được đề nghị làm việc cho vị trí '{job_title}'. Hãy kiểm tra email để biết thêm chi tiết.", "success"),
+        "Trúng tuyển": ("Chúc mừng - Trúng tuyển!", f"Chúc mừng bạn đã trúng tuyển vị trí '{job_title}'! Chào mừng bạn đến với đội ngũ của chúng tôi.", "success"),
+        "Từ chối": ("Thông báo kết quả", f"Cảm ơn bạn đã quan tâm đến vị trí '{job_title}'. Rất tiếc lần này chúng tôi không thể tiếp tục với hồ sơ của bạn.", "error"),
+    }
+    
+    return status_map.get(status, ("Cập nhật trạng thái", f"Trạng thái hồ sơ của bạn cho vị trí '{job_title}' đã được cập nhật thành '{status}'.", "info"))
+
 @router.delete("/{cv_id}")
 async def delete_cv_from_pool(
     cv_id: str, 
-    current_hr: str = Depends(get_current_user)
+    user_info: dict = Depends(get_current_user_with_role)
 ):
     db = get_db()
+    current_hr = user_info["email"]
+    user_role = user_info["role"]
+    
     try:
-        result = await db["hr_cvs"].delete_one({"_id": ObjectId(cv_id), "hr_email": current_hr})
+        # Admin có thể xóa bất kỳ CV nào, HR thường chỉ xóa CV của mình
+        if user_role == "admin":
+            result = await db["hr_cvs"].delete_one({"_id": ObjectId(cv_id)})
+        else:
+            result = await db["hr_cvs"].delete_one({"_id": ObjectId(cv_id), "hr_email": current_hr})
+            
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Không tìm thấy CV trong kho")
         
@@ -205,10 +280,20 @@ async def delete_cv_from_pool(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/pool")
-async def get_talent_pool(current_hr: str = Depends(get_current_user)):
+async def get_talent_pool(user_info: dict = Depends(get_current_user_with_role)):
     db = get_db()
+    current_hr = user_info["email"]
+    user_role = user_info["role"]
+    
     try:
-        cursor = db["hr_cvs"].find({"hr_email": current_hr}).sort("created_at", -1)
+        # Admin thấy tất cả CVs, HR thường chỉ thấy CVs của mình
+        if user_role == "admin":
+            cursor = db["hr_cvs"].find({}).sort("created_at", -1)
+            print(f"DEBUG: Admin viewing all CVs")
+        else:
+            cursor = db["hr_cvs"].find({"hr_email": current_hr}).sort("created_at", -1)
+            print(f"DEBUG: HR {current_hr} viewing own CVs")
+            
         cvs = await cursor.to_list(length=500)
         
         for cv in cvs:
@@ -224,14 +309,21 @@ async def get_talent_pool(current_hr: str = Depends(get_current_user)):
 @router.delete("/applications/{app_id}")
 async def remove_application_from_job(
     app_id: str, 
-    current_hr: str = Depends(get_current_user)
+    user_info: dict = Depends(get_current_user_with_role)
 ):
     db = get_db()
+    current_hr = user_info["email"]
+    user_role = user_info["role"]
+    
     try:
-        result = await db["hr_applications"].delete_one({
-            "_id": ObjectId(app_id), 
-            "hr_email": current_hr
-        })
+        # Admin có thể xóa bất kỳ application nào, HR thường chỉ xóa applications của mình
+        if user_role == "admin":
+            result = await db["hr_applications"].delete_one({"_id": ObjectId(app_id)})
+        else:
+            result = await db["hr_applications"].delete_one({
+                "_id": ObjectId(app_id), 
+                "hr_email": current_hr
+            })
         
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển này")
@@ -241,10 +333,20 @@ async def remove_application_from_job(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/applications/recent")
-async def get_recent_applications(current_hr: str = Depends(get_current_user)):
+async def get_recent_applications(user_info: dict = Depends(get_current_user_with_role)):
     db = get_db()
+    current_hr = user_info["email"]
+    user_role = user_info["role"]
+    
     try:
-        cursor = db["hr_applications"].find({"hr_email": current_hr}).sort("applied_at", -1).limit(100)
+        # Admin thấy tất cả applications, HR thường chỉ thấy applications của mình
+        if user_role == "admin":
+            cursor = db["hr_applications"].find({}).sort("applied_at", -1).limit(100)
+            print(f"DEBUG: Admin viewing all applications")
+        else:
+            cursor = db["hr_applications"].find({"hr_email": current_hr}).sort("applied_at", -1).limit(100)
+            print(f"DEBUG: HR {current_hr} viewing own applications")
+            
         applications = await cursor.to_list(length=100)
         
         result = []

@@ -14,6 +14,19 @@ from pydantic import BaseModel
 import httpx
 from fastapi.security import OAuth2PasswordRequestForm
 
+class ProfileUpdate(BaseModel):
+    full_name: str
+    phone: str = None
+    address: str = None
+    github: str = None
+    linkedin: str = None
+    bio: str = None
+    avatar: str = None
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
 router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 
@@ -165,6 +178,7 @@ async def google_login(request: GoogleAuthRequest = Body(...)):
                 "hashed_password": hashed_pw,
                 "avatar": final_avatar,
                 "original_avatar": final_avatar,
+                "role": "applicant",  # Mặc định là applicant khi đăng nhập bằng Google
                 "is_verified": True, 
                 "created_at": datetime.now(timezone.utc)
             }
@@ -193,8 +207,9 @@ async def google_login(request: GoogleAuthRequest = Body(...)):
     except ValueError:
         raise HTTPException(status_code=401, detail="Token từ Google không hợp lệ hoặc đã hết hạn")
     
-@router.get("/me")
-async def get_current_user_profile(email: str = Depends(get_current_user)):
+@router.get("/profile")
+async def get_profile(email: str = Depends(get_current_user)):
+    """Lấy thông tin profile đầy đủ của user"""
     db = get_db()
     user = await db["hr_users"].find_one({"email": email})
     
@@ -203,9 +218,100 @@ async def get_current_user_profile(email: str = Depends(get_current_user)):
         
     return {
         "email": user["email"],
-        "full_name": user.get("full_name", "HR Manager"),
+        "full_name": user.get("full_name", ""),
+        "phone": user.get("phone", ""),
+        "address": user.get("address", ""),
+        "github": user.get("github", ""),
+        "linkedin": user.get("linkedin", ""),
+        "bio": user.get("bio", ""),
         "avatar": user.get("avatar", ""),
         "role": user.get("role", "hr")
+    }
+
+@router.patch("/profile")
+async def update_profile(profile_data: ProfileUpdate, email: str = Depends(get_current_user)):
+    """Cập nhật thông tin profile"""
+    db = get_db()
+    
+    # Prepare update data
+    update_data = {
+        "full_name": profile_data.full_name,
+        "phone": profile_data.phone,
+        "address": profile_data.address,
+        "github": profile_data.github,
+        "linkedin": profile_data.linkedin,
+        "bio": profile_data.bio,
+        "avatar": profile_data.avatar,
+        "updated_at": datetime.now(timezone.utc)
+    }
+    
+    # Remove None values
+    update_data = {k: v for k, v in update_data.items() if v is not None}
+    
+    result = await db["hr_users"].update_one(
+        {"email": email},
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+        
+    return {"status": "success", "message": "Cập nhật thông tin thành công"}
+
+@router.patch("/change-password")
+async def change_password(password_data: PasswordChange, email: str = Depends(get_current_user)):
+    """Đổi mật khẩu"""
+    db = get_db()
+    
+    # Get current user
+    user = await db["hr_users"].find_one({"email": email})
+    if not user:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+    
+    # Verify current password
+    if not verify_password(password_data.current_password, user["hashed_password"]):
+        raise HTTPException(status_code=400, detail="Mật khẩu hiện tại không đúng")
+    
+    # Hash new password
+    new_hashed_password = get_password_hash(password_data.new_password)
+    
+    # Update password
+    result = await db["hr_users"].update_one(
+        {"email": email},
+        {"$set": {
+            "hashed_password": new_hashed_password,
+            "updated_at": datetime.now(timezone.utc)
+        }}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+        
+    return {"status": "success", "message": "Đổi mật khẩu thành công"}
+
+@router.get("/me")
+async def get_current_user_profile(email: str = Depends(get_current_user)):
+    db = get_db()
+    user = await db["hr_users"].find_one({"email": email})
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="Không tìm thấy thông tin người dùng")
+    
+    # Lấy role, nếu không có thì mặc định là "applicant"
+    role = user.get("role", "applicant")
+    
+    # Nếu user không có role trong DB, cập nhật luôn
+    if "role" not in user:
+        await db["hr_users"].update_one(
+            {"email": email},
+            {"$set": {"role": "applicant"}}
+        )
+        
+    return {
+        "email": user["email"],
+        "full_name": user.get("full_name", "User"),
+        "avatar": user.get("avatar", ""),
+        "role": role
     }
 
 @router.post("/docs-login", response_model=Token, include_in_schema=False)

@@ -3,7 +3,7 @@ from typing import List
 from datetime import datetime, timezone
 from bson import ObjectId
 
-from app.auth import get_current_user
+from app.auth import get_current_user, get_current_user_with_role
 from app.database.config import get_db
 from app.database.models import JobCreateEnterprise, JobResponse
 from app.services.nlp_engine import score_cv
@@ -62,18 +62,41 @@ async def create_job(job: JobCreateEnterprise, current_hr: str = Depends(get_cur
     return {"message": "Tạo chiến dịch thành công", "job_id": str(result.inserted_id)}
 
 @router.get("/", response_model=List[JobResponse])
-async def get_my_jobs(current_hr: str = Depends(get_current_user)):
+async def get_my_jobs(user_info: dict = Depends(get_current_user_with_role)):
     db = get_db()
-    cursor = db["hr_jobs"].find({"created_by": current_hr}).sort("created_at", -1)
+    current_hr = user_info["email"]
+    user_role = user_info["role"]
+    
+    print(f"DEBUG: Getting jobs for HR: {current_hr}, Role: {user_role}")
+    
+    # Admin thấy tất cả jobs, HR thường chỉ thấy jobs của mình
+    if user_role == "admin":
+        cursor = db["hr_jobs"].find({}).sort("created_at", -1)
+        print("DEBUG: Admin - fetching ALL jobs")
+    else:
+        cursor = db["hr_jobs"].find({"created_by": current_hr}).sort("created_at", -1)
+        print(f"DEBUG: HR - fetching jobs created by {current_hr}")
+    
     jobs = await cursor.to_list(length=100)
+    print(f"DEBUG: Found {len(jobs)} jobs")
+    
     for job in jobs:
         job["id"] = str(job["_id"])
+        print(f"DEBUG: Job ID: {job['id']}, Title: {job.get('title', 'No title')}, Created by: {job.get('created_by', 'Unknown')}")
     return jobs
 
 @router.get("/{job_id}", response_model=JobResponse)
-async def get_job_detail(job_id: str, current_hr: str = Depends(get_current_user)):
+async def get_job_detail(job_id: str, user_info: dict = Depends(get_current_user_with_role)):
     db = get_db()
-    job = await db["hr_jobs"].find_one({"_id": ObjectId(job_id), "created_by": current_hr})
+    current_hr = user_info["email"]
+    user_role = user_info["role"]
+    
+    # Admin có thể xem tất cả jobs, HR thường chỉ xem jobs của mình
+    if user_role == "admin":
+        job = await db["hr_jobs"].find_one({"_id": ObjectId(job_id)})
+    else:
+        job = await db["hr_jobs"].find_one({"_id": ObjectId(job_id), "created_by": current_hr})
+    
     if not job:
         raise HTTPException(status_code=404, detail="Không tìm thấy chiến dịch")
     job["id"] = str(job["_id"])
@@ -84,10 +107,18 @@ async def update_job(
     job_id: str,
     background_tasks: BackgroundTasks,
     job_update: JobCreateEnterprise = Body(...),
-    current_hr: str = Depends(get_current_user)
+    user_info: dict = Depends(get_current_user_with_role)
 ):
     db = get_db()
-    existing_job = await db["hr_jobs"].find_one({"_id": ObjectId(job_id), "created_by": current_hr})
+    current_hr = user_info["email"]
+    user_role = user_info["role"]
+    
+    # Admin có thể edit tất cả jobs, HR thường chỉ edit jobs của mình
+    if user_role == "admin":
+        existing_job = await db["hr_jobs"].find_one({"_id": ObjectId(job_id)})
+    else:
+        existing_job = await db["hr_jobs"].find_one({"_id": ObjectId(job_id), "created_by": current_hr})
+    
     if not existing_job:
         raise HTTPException(status_code=404, detail="Không tìm thấy Job hoặc bạn không có quyền chỉnh sửa")
 
@@ -113,9 +144,17 @@ async def update_job(
     }
 
 @router.delete("/{job_id}")
-async def delete_job(job_id: str, current_hr: str = Depends(get_current_user)):
+async def delete_job(job_id: str, user_info: dict = Depends(get_current_user_with_role)):
     db = get_db()
-    result = await db["hr_jobs"].delete_one({"_id": ObjectId(job_id), "created_by": current_hr})
+    current_hr = user_info["email"]
+    user_role = user_info["role"]
+    
+    # Admin có thể xóa tất cả jobs, HR thường chỉ xóa jobs của mình
+    if user_role == "admin":
+        result = await db["hr_jobs"].delete_one({"_id": ObjectId(job_id)})
+    else:
+        result = await db["hr_jobs"].delete_one({"_id": ObjectId(job_id), "created_by": current_hr})
+    
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Không tìm thấy Job hoặc bạn không có quyền xóa")
         
@@ -123,9 +162,17 @@ async def delete_job(job_id: str, current_hr: str = Depends(get_current_user)):
     return {"status": "success", "message": "Đã xóa chiến dịch. CV ứng viên vẫn được bảo lưu trong Kho hồ sơ."}
 
 @router.get("/{job_id}/ranking")
-async def get_job_ranking(job_id: str, current_hr: str = Depends(get_current_user)):
+async def get_job_ranking(job_id: str, user_info: dict = Depends(get_current_user_with_role)):
     db = get_db()
-    job = await db["hr_jobs"].find_one({"_id": ObjectId(job_id), "created_by": current_hr})
+    current_hr = user_info["email"]
+    user_role = user_info["role"]
+    
+    # Admin có thể xem ranking của tất cả jobs, HR thường chỉ xem jobs của mình
+    if user_role == "admin":
+        job = await db["hr_jobs"].find_one({"_id": ObjectId(job_id)})
+    else:
+        job = await db["hr_jobs"].find_one({"_id": ObjectId(job_id), "created_by": current_hr})
+    
     if not job:
         raise HTTPException(status_code=404, detail="Không tìm thấy chiến dịch")
 
@@ -155,16 +202,30 @@ async def get_job_ranking(job_id: str, current_hr: str = Depends(get_current_use
     }
 
 @router.get("/dashboard/analytics")
-async def get_dashboard_analytics(current_hr: str = Depends(get_current_user)):
+async def get_dashboard_analytics(user_info: dict = Depends(get_current_user_with_role)):
     db = get_db()
-    total_jobs = await db["hr_jobs"].count_documents({"created_by": current_hr})
-    open_jobs = await db["hr_jobs"].count_documents({"created_by": current_hr, "status": "open"})
-    total_cvs_in_pool = await db["hr_cvs"].count_documents({"hr_email": current_hr})
+    current_hr = user_info["email"]
+    user_role = user_info["role"]
     
-    pipeline = [
-        {"$match": {"hr_email": current_hr}},
-        {"$group": {"_id": "$status", "count": {"$sum": 1}}}
-    ]
+    # Admin xem analytics của tất cả, HR thường chỉ xem của mình
+    if user_role == "admin":
+        total_jobs = await db["hr_jobs"].count_documents({})
+        open_jobs = await db["hr_jobs"].count_documents({"status": "open"})
+        total_cvs_in_pool = await db["hr_cvs"].count_documents({})
+        
+        pipeline = [
+            {"$group": {"_id": "$status", "count": {"$sum": 1}}}
+        ]
+    else:
+        total_jobs = await db["hr_jobs"].count_documents({"created_by": current_hr})
+        open_jobs = await db["hr_jobs"].count_documents({"created_by": current_hr, "status": "open"})
+        total_cvs_in_pool = await db["hr_cvs"].count_documents({"hr_email": current_hr})
+        
+        pipeline = [
+            {"$match": {"hr_email": current_hr}},
+            {"$group": {"_id": "$status", "count": {"$sum": 1}}}
+        ]
+    
     status_counts = await db["hr_applications"].aggregate(pipeline).to_list(length=None)
     status_breakdown = {item["_id"] if item["_id"] else "Mới": item["count"] for item in status_counts}
     
