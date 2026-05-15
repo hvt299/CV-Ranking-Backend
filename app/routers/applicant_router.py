@@ -157,8 +157,7 @@ async def apply_to_job(
     return {
         "status": "success",
         "message": f"Nộp hồ sơ thành công cho vị trí '{job.get('title')}'",
-        "submission_id": str(result.inserted_id),
-        "ai_score": scoring_result
+        "submission_id": str(result.inserted_id)
     }
 
 @router.get("/my-applications")
@@ -166,7 +165,7 @@ async def my_applications(current_applicant: str = Depends(require_applicant)):
     db = get_db()
     cursor = db["applicant_submissions"].find(
         {"applicant_email": current_applicant},
-        {"raw_text": 0}
+        {"raw_text": 0, "ai_score": 0}
     ).sort("submitted_at", -1)
     apps = await cursor.to_list(length=100)
     for a in apps:
