@@ -360,7 +360,6 @@ def score_cv(cv_data: dict, jd_data: dict) -> dict:
 
     total_score = min(100.0, total_score)
 
-    # Calculate penalty based on word count - FIXED VERSION
     raw_text = cv_data.get("raw_text", "").lower()
     eng_words = [" the ", " and ", " in ", " to ", " of ", " for ", " with "]
     vie_words = [" và ", " của ", " trong ", " cho ", " với ", " tại ", " là ", " các ", " người "]
@@ -372,14 +371,12 @@ def score_cv(cv_data: dict, jd_data: dict) -> dict:
     threshold_severe = 100 if is_english else 200
     threshold_light = 150 if is_english else 300
 
-    word_count = cv_data.get("word_count", 0)
-    if word_count is None:
-        word_count = 0
-    
+    word_count = cv_data.get("word_count") 
     penalty_score = 0.0
-    if word_count > 0 and word_count < threshold_severe:
+    
+    if word_count < threshold_severe:
         penalty_score = 20.0
-    elif word_count > 0 and word_count < threshold_light:
+    elif word_count < threshold_light:
         penalty_score = 10.0
         
     total_score = max(0.0, total_score - penalty_score)
