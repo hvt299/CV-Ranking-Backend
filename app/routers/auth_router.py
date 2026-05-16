@@ -1,7 +1,10 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status, Body, BackgroundTasks
 from datetime import datetime, timezone, timedelta
 import secrets
 import hashlib
+from fastapi.responses import JSONResponse
 import jwt
 from app.database.config import get_db
 from app.database.models import HRUserCreate, HRUserLogin, Token
@@ -10,7 +13,7 @@ from app.services.email_service import send_verification_email, send_reset_passw
 import urllib.parse
 from bson import ObjectId
 import os
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import httpx
 from fastapi.security import OAuth2PasswordRequestForm
 
@@ -145,8 +148,9 @@ async def reset_password(token: str = Body(...), new_password: str = Body(...)):
 
 class GoogleAuthRequest(BaseModel):
     access_token: str
+    role: Optional[str] = None
 
-@router.post("/google", response_model=Token)
+@router.post("/google")
 async def google_login(request: GoogleAuthRequest = Body(...)):
     try:
         async with httpx.AsyncClient() as client:
@@ -165,9 +169,18 @@ async def google_login(request: GoogleAuthRequest = Body(...)):
         user = await db["hr_users"].find_one({"email": email})
         
         if not user:
+            if not request.role:
+                return JSONResponse(
+                    status_code=202, 
+                    content={
+                        "action": "require_role", 
+                        "message": "Vui lòng chọn vai trò để hoàn tất",
+                        "email": email
+                    }
+                )
+            
             random_pw = secrets.token_urlsafe(32)
             hashed_pw = get_password_hash(random_pw)
-            
             encoded_name = urllib.parse.quote(full_name)
             fallback_avatar = f"https://ui-avatars.com/api/?name={encoded_name}&background=random&color=fff&size=200"
             final_avatar = picture if picture else fallback_avatar
@@ -178,7 +191,7 @@ async def google_login(request: GoogleAuthRequest = Body(...)):
                 "hashed_password": hashed_pw,
                 "avatar": final_avatar,
                 "original_avatar": final_avatar,
-                "role": "applicant",  # Mặc định là applicant khi đăng nhập bằng Google
+                "role": request.role,
                 "is_verified": True, 
                 "created_at": datetime.now(timezone.utc)
             }
@@ -186,21 +199,17 @@ async def google_login(request: GoogleAuthRequest = Body(...)):
             
         else:
             update_fields = {}
-            
             if not user.get("is_verified", False):
                 update_fields["is_verified"] = True
-                
+            
             current_avatar = user.get("avatar", "")
             if picture and "ui-avatars.com" in current_avatar:
                 update_fields["avatar"] = picture
                 update_fields["original_avatar"] = picture
                 
             if update_fields:
-                await db["hr_users"].update_one(
-                    {"email": email}, 
-                    {"$set": update_fields}
-                )
-            
+                await db["hr_users"].update_one({"email": email}, {"$set": update_fields})
+                
         access_token = create_access_token(data={"sub": email})
         return {"access_token": access_token, "token_type": "bearer"}
         
