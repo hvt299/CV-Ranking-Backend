@@ -15,7 +15,7 @@ MAX_FILE_SIZE = 5 * 1024 * 1024
 class NotificationCreate(BaseModel):
     title: str
     message: str
-    type: str = "info"  # success, error, info, warning
+    type: str = "info"
     job_title: Optional[str] = None
     application_id: Optional[str] = None
     application_status: Optional[str] = None
@@ -79,7 +79,6 @@ async def apply_to_job(
         if datetime.now(timezone.utc) > deadline:
             raise HTTPException(status_code=400, detail="Chiến dịch tuyển dụng đã hết hạn nộp hồ sơ")
 
-    # Kiểm tra đã nộp chưa
     existing = await db["applicant_submissions"].find_one({
         "applicant_email": current_applicant,
         "job_id": job_id
@@ -129,7 +128,6 @@ async def apply_to_job(
 
     result = await db["applicant_submissions"].insert_one(submission)
 
-    # Đồng thời tạo bản ghi trong hr_applications để HR thấy trong leaderboard
     cv_pool_record = {
         "hr_email": job.get("created_by"),
         "filename": file.filename,
@@ -173,10 +171,8 @@ async def my_applications(current_applicant: str = Depends(require_applicant)):
         del a["_id"]
     return apps
 
-# Notification endpoints
 @router.get("/notifications")
 async def get_notifications(current_applicant: str = Depends(require_applicant)):
-    """Lấy danh sách thông báo của ứng viên"""
     db = get_db()
     cursor = db["applicant_notifications"].find(
         {"applicant_email": current_applicant}
@@ -254,7 +250,6 @@ async def delete_notification(
     except Exception as e:
         raise HTTPException(status_code=400, detail="ID thông báo không hợp lệ")
 
-# Helper function to create notifications
 async def create_notification(
     applicant_email: str,
     title: str,
@@ -264,7 +259,6 @@ async def create_notification(
     application_id: Optional[str] = None,
     application_status: Optional[str] = None
 ):
-    """Tạo thông báo mới cho ứng viên"""
     db = get_db()
     
     notification = {

@@ -67,22 +67,15 @@ async def get_my_jobs(user_info: dict = Depends(get_current_user_with_role)):
     current_hr = user_info["email"]
     user_role = user_info["role"]
     
-    print(f"DEBUG: Getting jobs for HR: {current_hr}, Role: {user_role}")
-    
-    # Admin thấy tất cả jobs, HR thường chỉ thấy jobs của mình
     if user_role == "admin":
         cursor = db["hr_jobs"].find({}).sort("created_at", -1)
-        print("DEBUG: Admin - fetching ALL jobs")
     else:
         cursor = db["hr_jobs"].find({"created_by": current_hr}).sort("created_at", -1)
-        print(f"DEBUG: HR - fetching jobs created by {current_hr}")
     
     jobs = await cursor.to_list(length=100)
-    print(f"DEBUG: Found {len(jobs)} jobs")
     
     for job in jobs:
         job["id"] = str(job["_id"])
-        print(f"DEBUG: Job ID: {job['id']}, Title: {job.get('title', 'No title')}, Created by: {job.get('created_by', 'Unknown')}")
     return jobs
 
 @router.get("/{job_id}", response_model=JobResponse)
@@ -91,7 +84,6 @@ async def get_job_detail(job_id: str, user_info: dict = Depends(get_current_user
     current_hr = user_info["email"]
     user_role = user_info["role"]
     
-    # Admin có thể xem tất cả jobs, HR thường chỉ xem jobs của mình
     if user_role == "admin":
         job = await db["hr_jobs"].find_one({"_id": ObjectId(job_id)})
     else:
@@ -113,7 +105,6 @@ async def update_job(
     current_hr = user_info["email"]
     user_role = user_info["role"]
     
-    # Admin có thể edit tất cả jobs, HR thường chỉ edit jobs của mình
     if user_role == "admin":
         existing_job = await db["hr_jobs"].find_one({"_id": ObjectId(job_id)})
     else:
@@ -149,7 +140,6 @@ async def delete_job(job_id: str, user_info: dict = Depends(get_current_user_wit
     current_hr = user_info["email"]
     user_role = user_info["role"]
     
-    # Admin có thể xóa tất cả jobs, HR thường chỉ xóa jobs của mình
     if user_role == "admin":
         result = await db["hr_jobs"].delete_one({"_id": ObjectId(job_id)})
     else:
@@ -167,7 +157,6 @@ async def get_job_ranking(job_id: str, user_info: dict = Depends(get_current_use
     current_hr = user_info["email"]
     user_role = user_info["role"]
     
-    # Admin có thể xem ranking của tất cả jobs, HR thường chỉ xem jobs của mình
     if user_role == "admin":
         job = await db["hr_jobs"].find_one({"_id": ObjectId(job_id)})
     else:
@@ -207,7 +196,6 @@ async def get_dashboard_analytics(user_info: dict = Depends(get_current_user_wit
     current_hr = user_info["email"]
     user_role = user_info["role"]
     
-    # Admin xem analytics của tất cả, HR thường chỉ xem của mình
     if user_role == "admin":
         total_jobs = await db["hr_jobs"].count_documents({})
         open_jobs = await db["hr_jobs"].count_documents({"status": "open"})

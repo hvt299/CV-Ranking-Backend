@@ -63,7 +63,6 @@ async def get_current_user_with_role(token: str = Depends(oauth2_scheme)):
     except jwt.PyJWTError:
         raise credentials_exception
     
-    # Lấy thông tin user từ database để có role
     db = get_db()
     user = await db["hr_users"].find_one({"email": email})
     if not user:

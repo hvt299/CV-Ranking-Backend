@@ -169,13 +169,11 @@ async def update_application_status(
     user_role = user_info["role"]
     
     try:
-        # Admin có thể update bất kỳ application nào, HR thường chỉ update applications của mình
         if user_role == "admin":
             filter_query = {"_id": ObjectId(app_id)}
         else:
             filter_query = {"_id": ObjectId(app_id), "hr_email": current_hr}
         
-        # Get current application data before update
         current_app = await db["hr_applications"].find_one(filter_query)
         if not current_app:
             raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển này")
@@ -196,20 +194,16 @@ async def update_application_status(
         if result.matched_count == 0:
             raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển này")
 
-        # Create notification for applicant if status changed
         if update_data.status is not None and update_data.status != current_app.get("status"):
-            # Get job and applicant info
             job = await db["hr_jobs"].find_one({"_id": ObjectId(current_app["job_id"])})
             cv = await db["hr_cvs"].find_one({"_id": ObjectId(current_app["cv_id"])})
             
-            # Check if this is from applicant submission
             applicant_submission = await db["applicant_submissions"].find_one({
                 "job_id": current_app["job_id"],
                 "applicant_email": {"$exists": True}
             })
             
             if applicant_submission and job:
-                # Create notification for applicant
                 notification_title, notification_message, notification_type = get_notification_content(
                     update_data.status, job.get("title", "Vị trí tuyển dụng")
                 )
@@ -228,7 +222,6 @@ async def update_application_status(
                 
                 await db["applicant_notifications"].insert_one(notification)
                 
-                # Also update the applicant_submissions status
                 await db["applicant_submissions"].update_one(
                     {
                         "job_id": current_app["job_id"],
@@ -264,7 +257,6 @@ async def delete_cv_from_pool(
     user_role = user_info["role"]
     
     try:
-        # Admin có thể xóa bất kỳ CV nào, HR thường chỉ xóa CV của mình
         if user_role == "admin":
             result = await db["hr_cvs"].delete_one({"_id": ObjectId(cv_id)})
         else:
@@ -286,13 +278,10 @@ async def get_talent_pool(user_info: dict = Depends(get_current_user_with_role))
     user_role = user_info["role"]
     
     try:
-        # Admin thấy tất cả CVs, HR thường chỉ thấy CVs của mình
         if user_role == "admin":
             cursor = db["hr_cvs"].find({}).sort("created_at", -1)
-            print(f"DEBUG: Admin viewing all CVs")
         else:
             cursor = db["hr_cvs"].find({"hr_email": current_hr}).sort("created_at", -1)
-            print(f"DEBUG: HR {current_hr} viewing own CVs")
             
         cvs = await cursor.to_list(length=500)
         
@@ -316,7 +305,6 @@ async def remove_application_from_job(
     user_role = user_info["role"]
     
     try:
-        # Admin có thể xóa bất kỳ application nào, HR thường chỉ xóa applications của mình
         if user_role == "admin":
             result = await db["hr_applications"].delete_one({"_id": ObjectId(app_id)})
         else:
@@ -339,13 +327,10 @@ async def get_recent_applications(user_info: dict = Depends(get_current_user_wit
     user_role = user_info["role"]
     
     try:
-        # Admin thấy tất cả applications, HR thường chỉ thấy applications của mình
         if user_role == "admin":
             cursor = db["hr_applications"].find({}).sort("applied_at", -1).limit(100)
-            print(f"DEBUG: Admin viewing all applications")
         else:
             cursor = db["hr_applications"].find({"hr_email": current_hr}).sort("applied_at", -1).limit(100)
-            print(f"DEBUG: HR {current_hr} viewing own applications")
             
         applications = await cursor.to_list(length=100)
         
