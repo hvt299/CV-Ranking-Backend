@@ -140,3 +140,23 @@ async def get_audit_logs():
         del lg["_id"]
         result.append(lg)
     return result
+
+@router.patch("/companies/{company_id}", dependencies=[Depends(require_admin)])
+async def admin_update_company(company_id: str, update_data: dict = Body(...)):
+    db = get_db()
+    
+    allowed_fields = ["name", "tax_code", "industry", "size", "website", "address", "license_file_url"]
+    clean_data = {k: v for k, v in update_data.items() if k in allowed_fields}
+    
+    if not clean_data:
+        return {"status": "success"}
+        
+    result = await db[Collections.COMPANIES].update_one(
+        {"_id": ObjectId(company_id)},
+        {"$set": clean_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Không tìm thấy công ty")
+        
+    return {"status": "success", "message": "Cập nhật thành công"}

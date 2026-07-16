@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Body, Request, Response
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Body, Request, Response, BackgroundTasks
 from bson import ObjectId
 from datetime import datetime, timezone
 from pydantic import BaseModel
@@ -11,6 +11,7 @@ from app.services.document_forensics import detect_hidden_text
 from app.auth import require_hr, require_hr_or_admin, get_scope_filter, CurrentUser
 from app.middleware.rate_limit import limiter
 from app.services.storage_service import upload_file_to_cloudinary, delete_file_from_cloudinary
+from app.services.email_service import send_interview_email
 
 router = APIRouter(prefix="/api/v1/cv", tags=["CV Processing & Talent Pool"])
 
@@ -207,6 +208,7 @@ async def map_cv_to_job(
 @router.patch("/applications/{app_id}", dependencies=[Depends(require_hr_or_admin)])
 async def update_application_status(
     app_id: str, 
+    background_tasks: BackgroundTasks,
     update_data: ApplicationUpdate = Body(...),
     scope_filter: dict = Depends(get_scope_filter)
 ):
@@ -234,10 +236,30 @@ async def update_application_status(
         
         if update_data.status is not None and update_data.status.value != current_app.get("status"):
             applicant_user_id = current_app.get("applicant_user_id")
+            job = await db[Collections.JOBS].find_one({"_id": ObjectId(current_app["job_id"])})
             
-            if applicant_user_id:
-                job = await db[Collections.JOBS].find_one({"_id": ObjectId(current_app["job_id"])})
+            if update_data.status.value == ApplicationStatus.INTERVIEW.value and update_data.send_email and update_data.interview_schedule:
+                candidate_email = current_app.get("cv_snapshot", {}).get("candidate_info", {}).get("email")
+                candidate_name = current_app.get("cv_snapshot", {}).get("display_name", current_app.get("cv_snapshot", {}).get("filename", "Ứng viên"))
                 
+                if candidate_email:
+                    company = await db[Collections.COMPANIES].find_one({"_id": ObjectId(current_app["company_id"])})
+                    company_name = company.get("name", "Công ty của chúng tôi") if company else "Công ty của chúng tôi"
+                    job_title = job.get("title", "Vị trí tuyển dụng") if job else "Vị trí tuyển dụng"
+                    
+                    send_interview_email(
+                        background_tasks=background_tasks,
+                        to=candidate_email,
+                        name=candidate_name,
+                        job_title=job_title,
+                        company_name=company_name,
+                        interview_time=update_data.interview_schedule.interview_time,
+                        location=update_data.interview_schedule.location,
+                        meeting_link=update_data.interview_schedule.meeting_link,
+                        custom_message=update_data.interview_schedule.message
+                    )
+
+            if applicant_user_id:               
                 title, message, notif_type = get_notification_content(
                     update_data.status.value, 
                     job.get("title", "Vị trí tuyển dụng") if job else "Vị trí tuyển dụng"
@@ -260,7 +282,6 @@ async def update_application_status(
         return {"status": "success", "message": "Đã cập nhật trạng thái ứng viên thành công"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.delete("/{cv_id}", dependencies=[Depends(require_hr_or_admin)])
 async def delete_cv_from_pool(cv_id: str, scope_filter: dict = Depends(get_scope_filter)):

@@ -485,9 +485,17 @@ class ApplicationDB(BaseModel):
     applied_at: datetime = Field(default_factory=utc_now)
     updated_at: Optional[datetime] = None
 
+class InterviewSchedule(BaseModel):
+    interview_time: str = Field(..., description="Thời gian phỏng vấn (VD: 14:00 - 20/10/2026)")
+    location: str = Field(..., description="Địa điểm hoặc hình thức phỏng vấn (VD: Tầng 3, Tòa nhà X / Online)")
+    meeting_link: Optional[str] = Field(default=None, description="Link Google Meet / Zoom")
+    message: Optional[str] = Field(default=None, description="Lời nhắn thêm từ HR")
+
 class ApplicationUpdate(BaseModel):
     status: Optional[ApplicationStatus] = None
     note_to_add: Optional[str] = Field(None, description="Thêm một dòng ghi chú mới vào mảng notes (author lấy từ token, không nhận từ client)")
+    send_email: bool = Field(default=False, description="Cờ xác nhận có gửi email cho ứng viên không")
+    interview_schedule: Optional[InterviewSchedule] = Field(default=None, description="Thông tin lịch phỏng vấn để gửi mail")
 
 # =====================================================================
 # AUDIT LOG — ghi vết mọi thao tác nhạy cảm để phục vụ đối soát/minh bạch.

@@ -80,6 +80,27 @@ I18N_MESSAGES = {
                 </div>
                 <p style="font-size: 14px; color: #666;"><em>*Lưu ý: Link mời này có thời hạn sử dụng trong 7 ngày. Không chia sẻ link này cho người khác.</em></p>
             """
+        },
+        "interview_invite": {
+            "subject": "Thư mời phỏng vấn - Vị trí {job_title} tại {company_name}",
+            "content": """
+                <p style="font-size: 16px;">Xin chào <strong>{name}</strong>,</p>
+                <p>Cảm ơn bạn đã quan tâm và ứng tuyển vào vị trí <strong>{job_title}</strong> tại <strong>{company_name}</strong>. Hồ sơ của bạn rất phù hợp và chúng tôi muốn mời bạn tham gia một buổi phỏng vấn để trao đổi chi tiết hơn.</p>
+                
+                <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin: 25px 0;">
+                    <h3 style="margin-top: 0; color: #1e40af; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px;">THÔNG TIN LỊCH HẸN</h3>
+                    <ul style="list-style: none; padding: 0; margin: 0; font-size: 15px; color: #334155;">
+                        <li style="margin-bottom: 10px;">🕒 <strong>Thời gian:</strong> {interview_time}</li>
+                        <li style="margin-bottom: 10px;">📍 <strong>Địa điểm/Hình thức:</strong> {location}</li>
+                        {meeting_link_html}
+                    </ul>
+                </div>
+                
+                {message_html}
+                
+                <p>Vui lòng phản hồi lại email này để xác nhận khả năng tham dự của bạn.</p>
+                <p>Trân trọng,<br/><strong>Bộ phận Tuyển dụng - {company_name}</strong></p>
+            """
         }
     },
     "en": {
@@ -239,4 +260,35 @@ def send_hr_invite_email(
     
     html_content = get_base_html(inner_html)
     
+    background_tasks.add_task(send_email_via_brevo, to, subject, html_content)
+
+def send_interview_email(
+    background_tasks: BackgroundTasks, 
+    to: str, 
+    name: str, 
+    job_title: str,
+    company_name: str,
+    interview_time: str,
+    location: str,
+    meeting_link: Optional[str] = None,
+    custom_message: Optional[str] = None,
+    lang: str = "vi"
+):
+    template = I18N_MESSAGES.get(lang, I18N_MESSAGES["vi"])["interview_invite"]
+    subject = template["subject"].format(job_title=job_title, company_name=company_name)
+    
+    meeting_link_html = f'<li style="margin-bottom: 10px;">🔗 <strong>Link tham gia:</strong> <a href="{meeting_link}" style="color: #2563eb;">{meeting_link}</a></li>' if meeting_link else ""
+    message_html = f'<div style="background-color: #fffbeb; padding: 15px; border-left: 4px solid #f59e0b; margin-bottom: 20px;"><strong>Ghi chú từ Nhân sự:</strong><br/>{custom_message}</div>' if custom_message else ""
+    
+    inner_html = template["content"].format(
+        name=name, 
+        job_title=job_title, 
+        company_name=company_name,
+        interview_time=interview_time,
+        location=location,
+        meeting_link_html=meeting_link_html,
+        message_html=message_html
+    )
+    
+    html_content = get_base_html(inner_html)
     background_tasks.add_task(send_email_via_brevo, to, subject, html_content)

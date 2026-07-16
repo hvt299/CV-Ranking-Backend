@@ -9,6 +9,7 @@ from app.middleware.rate_limit import limiter
 
 from app.database.config import connect_to_mongo, close_mongo_connection
 from app.routers import auth_router, cv_router, job_router, admin_router, applicant_router, company_router
+from app.routers.upload_router import router as upload_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -41,6 +42,7 @@ app.include_router(job_router.router)
 app.include_router(cv_router.router)
 app.include_router(applicant_router.router)
 app.include_router(company_router.router)
+app.include_router(upload_router)
 
 @app.get("/", tags=["Health Check"])
 def root():

@@ -19,6 +19,7 @@ from app.services.vector_engine import compress_cv_data, get_embedding, get_top_
 from app.services.document_forensics import detect_hidden_text
 from app.middleware.rate_limit import limiter
 from app.services.storage_service import upload_file_to_cloudinary, delete_file_from_cloudinary
+from typing import Optional
 
 router = APIRouter(prefix="/api/v1/apply", tags=["Applicant"])
 MAX_FILE_SIZE = 5 * 1024 * 1024
@@ -223,6 +224,7 @@ async def delete_notification(
 
 class ApplyJobRequest(BaseModel):
     cv_document_id: str
+    cover_letter: Optional[str] = None
 
 class SelfScoreRequest(BaseModel):
     cv_document_id: str
