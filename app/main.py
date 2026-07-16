@@ -1,9 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.database.config import connect_to_mongo, close_mongo_connection
-from app.routers import auth_router, cv_router, job_router
-from app.routers import admin_router, applicant_router
 from contextlib import asynccontextmanager
+
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.errors import RateLimitExceeded
+from app.middleware.rate_limit import limiter
+
+from app.database.config import connect_to_mongo, close_mongo_connection
+from app.routers import auth_router, cv_router, job_router, admin_router, applicant_router, company_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -12,25 +17,30 @@ async def lifespan(app: FastAPI):
     await close_mongo_connection()
 
 app = FastAPI(
-    title="CV Ranking System API",
-    version="1.0.0",
-    description="Hệ thống phân tích và xếp hạng hồ sơ ứng viên bằng AI",
+    title="AI CV Ranking ATS",
+    version="2.0.0", 
+    description="Hệ thống Quản lý Tuyển dụng và Đánh giá Ứng viên tự động bằng AI",
     lifespan=lifespan
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=["*"], 
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.include_router(auth_router.router)
-app.include_router(cv_router.router)
-app.include_router(job_router.router)
 app.include_router(admin_router.router)
+app.include_router(job_router.router)
+app.include_router(cv_router.router)
 app.include_router(applicant_router.router)
+app.include_router(company_router.router)
 
 @app.get("/", tags=["Health Check"])
 def root():

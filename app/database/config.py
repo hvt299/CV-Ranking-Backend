@@ -12,10 +12,22 @@ class Database:
 
 db_instance = Database()
 
+class Collections:
+    USERS = "users"
+    COMPANIES = "companies"
+    JOBS = "jobs"
+    CVS = "cvs"
+    APPLICATIONS = "applications"
+    NOTIFICATIONS = "notifications"
+    CV_VECTORS = "cv_vectors"
+    JD_VECTORS = "jd_vectors"
+
+MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "cv-ranking")
+
 async def connect_to_mongo():
     try:
         db_instance.client = AsyncIOMotorClient(MONGO_URL)
-        db_instance.db = db_instance.client.get_default_database("cv-ranking")
+        db_instance.db = db_instance.client.get_default_database(MONGO_DB_NAME)
         print("Đã kết nối thành công với MongoDB!")
     except Exception as e:
         print(f"Lỗi kết nối MongoDB: {e}")
