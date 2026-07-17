@@ -22,17 +22,36 @@ IGNORE_TEXTS = {
 MIN_TINY_FONT = 2.0
 SMALL_FONT = 4.0
 
-TECH_KEYWORDS = {
-    "python", "java", "c++", "c#", ".net",
-    "docker", "kubernetes", "aws", "azure",
-    "gcp", "tensorflow", "pytorch", "sql",
-    "nosql", "mongodb", "redis", "linux",
-    "react", "angular", "vue", "nodejs",
-    "node.js", "fastapi", "django", "flask",
-    "spring", "git", "github", "gitlab",
-    "nlp", "llm", "rag", "embedding",
-    "machine", "learning", "deep", "learning"
+INDUSTRY_KEYWORDS = {
+    "it": {
+        "python", "java", "c++", "c#", ".net", "docker", "kubernetes", "aws", "azure",
+        "gcp", "tensorflow", "pytorch", "sql", "nosql", "mongodb", "redis", "linux",
+        "react", "angular", "vue", "nodejs", "fastapi", "django", "flask", "spring",
+        "nlp", "llm", "rag", "embedding", "machine learning", "deep learning"
+    },
+    "marketing": {
+        "seo", "content", "facebook ads", "tiktok", "livestream", "kol", "koc", 
+        "conversion", "roi", "branding", "digital marketing", "campaign", "pr", "b2b"
+    },
+    "accounting": {
+        "misa", "fast", "hạch toán", "báo cáo tài chính", "quyết toán thuế", 
+        "khấu hao", "kiểm toán", "công nợ", "nghiệp vụ", "thuế"
+    },
+    "design": {
+        "photoshop", "illustrator", "figma", "ui/ux", "3d", "after effects", 
+        "premiere", "indesign", "graphic", "layout", "render"
+    },
+    "construction": {
+        "autocad", "revit", "bim", "dự toán", "kết cấu", "an toàn lao động", 
+        "hse", "thi công", "nghiệm thu", "giám sát", "bản vẽ"
+    },
+    "sales": {
+        "doanh số", "kpi", "chốt sale", "telesales", "khách hàng", "đàm phán", 
+        "thị trường", "pipeline", "b2c", "b2b", "doanh thu"
+    }
 }
+
+ALL_KEYWORDS = set().union(*INDUSTRY_KEYWORDS.values())
 
 
 def _normalize_text(text: str) -> str:
@@ -54,13 +73,15 @@ def _is_watermark(text: str) -> bool:
     return False
 
 
-def _looks_like_keyword_stuffing(text: str) -> bool:
+def _looks_like_keyword_stuffing(text: str, industry: str = "all") -> bool:
     words = text.lower().replace(",", " ").split()
 
     if len(words) < 5:
         return False
 
-    matched = sum(1 for w in words if w in TECH_KEYWORDS)
+    keywords_to_check = INDUSTRY_KEYWORDS.get(industry, ALL_KEYWORDS)
+
+    matched = sum(1 for w in words if w in keywords_to_check)
 
     return matched >= 4
 
@@ -75,21 +96,7 @@ def _risk_to_penalty(risk_score: int) -> int:
     return 0
 
 
-def detect_hidden_text(file_bytes: bytes, filename: str) -> Dict:
-    """
-    Detect hidden text with forensic scoring.
-
-    Returns
-    -------
-    {
-        "detected": bool,
-        "risk_score": int,
-        "penalty": int,
-        "reasons": [...],
-        "evidence": [...]
-    }
-    """
-
+def detect_hidden_text(file_bytes: bytes, filename: str, industry: str = "all") -> Dict:
     risk_score = 0
     reasons: List[str] = []
     evidence: List[dict] = []
@@ -160,7 +167,7 @@ def detect_hidden_text(file_bytes: bytes, filename: str) -> Dict:
                                     span_score += 40
                                     span_reasons.append("Outside page")
 
-                            if _looks_like_keyword_stuffing(text):
+                            if _looks_like_keyword_stuffing(text, industry):
                                 span_score += 20
                                 span_reasons.append("Keyword stuffing")
 
@@ -237,7 +244,7 @@ def detect_hidden_text(file_bytes: bytes, filename: str) -> Dict:
                             span_score += 15
                             span_reasons.append("Very small font")
 
-                    if _looks_like_keyword_stuffing(text):
+                    if _looks_like_keyword_stuffing(text, industry):
                         span_score += 20
                         span_reasons.append("Keyword stuffing")
 

@@ -37,30 +37,50 @@ def load_skills(file_path: str) -> Dict[str, List[str]]:
         logger.error(f"Lỗi tải file {file_path}: {e}")
     return skill_map
 
-def load_all_skills() -> Dict[str, List[str]]:
-    merged_skill_map = {}
+def load_all_skills_by_industry() -> Dict[str, Dict[str, List[str]]]:
+    industry_skill_map = {}
 
-    for filename in os.listdir(SKILLS_FOLDER):
-        if not filename.startswith("skills_") or not filename.endswith(".csv"):
-            continue
+    if not os.path.exists(SKILLS_FOLDER):
+        logger.warning(f"Không tìm thấy thư mục {SKILLS_FOLDER}")
+        return industry_skill_map
 
-        file_path = os.path.join(SKILLS_FOLDER, filename)
-        skill_map = load_skills(file_path)
+    for industry_folder in os.listdir(SKILLS_FOLDER):
+        industry_path = os.path.join(SKILLS_FOLDER, industry_folder)
+        
+        if os.path.isdir(industry_path):
+            merged_skill_map = {}
+            for filename in os.listdir(industry_path):
+                if not filename.endswith(".csv"):
+                    continue
 
-        for main, variants in skill_map.items():
-            if main not in merged_skill_map:
-                merged_skill_map[main] = variants
+                file_path = os.path.join(industry_path, filename)
+                skill_map = load_skills(file_path)
+
+                for main, variants in skill_map.items():
+                    if main not in merged_skill_map:
+                        merged_skill_map[main] = variants
+                    else:
+                        merged_skill_map[main] = list(
+                            set(merged_skill_map[main]) | set(variants)
+                        )
+            
+            industry_skill_map[industry_folder] = merged_skill_map
+            logger.info(f"Đã tải {len(merged_skill_map)} kỹ năng cho ngành '{industry_folder}'")
+
+    all_skills = {}
+    for skills in industry_skill_map.values():
+        for main, variants in skills.items():
+            if main not in all_skills:
+                all_skills[main] = variants
             else:
-                merged_skill_map[main] = list(
-                    set(merged_skill_map[main]) | set(variants)
-                )
+                all_skills[main] = list(set(all_skills[main]) | set(variants))
+                
+    industry_skill_map["all"] = all_skills
+    logger.info(f"Tổng cộng đã tải {len(all_skills)} kỹ năng vào bộ từ điển chung (fallback).")
+    
+    return industry_skill_map
 
-    logger.info(f"Đã tải {len(merged_skill_map)} kỹ năng từ các file CSV.")
-
-    return merged_skill_map
-
-
-SKILL_MAP = load_all_skills()
+INDUSTRY_SKILL_MAP = load_all_skills_by_industry()
 
 def get_smart_skill_pattern(skill: str) -> str:
     escaped = re.escape(skill)
@@ -91,11 +111,13 @@ def extract_text_from_docx(file_bytes: bytes) -> str:
     doc = docx.Document(io.BytesIO(file_bytes))
     return "\n".join(p.text for p in doc.paragraphs)
 
-def extract_skills(text: str) -> List[str]:
+def extract_skills(text: str, industry: str = "all") -> List[str]:
     text_lower = text.lower()
     found = set()
 
-    for main, variants in SKILL_MAP.items():
+    target_skill_map = INDUSTRY_SKILL_MAP.get(industry, INDUSTRY_SKILL_MAP.get("all", {}))
+
+    for main, variants in target_skill_map.items():
         for v in variants:
             pattern = get_smart_skill_pattern(v)
             if re.search(pattern, text_lower):
@@ -253,19 +275,46 @@ def analyze_cv_text(text: str) -> Dict:
         "portfolio": social_links["portfolio"]
     }
 
-def get_normalized_skill(raw_skill: str) -> str:
+def get_normalized_skill(raw_skill: str, industry: str = "all") -> str:
     raw_lower = raw_skill.lower().strip()
-    for root, variants in SKILL_MAP.items():
+    target_skill_map = INDUSTRY_SKILL_MAP.get(industry, INDUSTRY_SKILL_MAP.get("all", {}))
+    
+    for root, variants in target_skill_map.items():
         if raw_lower == root or raw_lower in variants:
             return root
     return raw_lower
 
-def verify_skill_context(text: str, skills: list) -> dict:
+def verify_skill_context(text: str, skills: list, industry: str = "other") -> dict:
     sentences = re.split(r'(?<=[.!?\n])\s+', text)
-    action_verbs = [
-        "phát triển", "xây dựng", "thiết kế", "tối ưu", "quản lý", "sử dụng", "tham gia", "đóng góp",
-        "develop", "build", "create", "optimize", "manage", "use", "implement", "deploy", "work"
-    ]
+    
+    general_verbs = ["quản lý", "tham gia", "hỗ trợ", "chịu trách nhiệm", "thực hiện", "phụ trách", "manage", "support"]
+    
+    industry_verbs = {
+        "it": ["phát triển", "xây dựng", "tối ưu", "triển khai", "deploy", "build", "code"],
+        
+        # Nhóm Kinh doanh / Marketing / Bán lẻ
+        "sales": ["đàm phán", "chốt", "tư vấn", "mở rộng", "thuyết phục", "đạt doanh số", "ký kết"],
+        "marketing": ["lên ý tưởng", "chạy", "tối ưu ads", "viết", "sáng tạo", "định hướng", "phân tích thị trường"],
+        "retail_lifestyle": ["trưng bày", "phục vụ", "chăm sóc", "tư vấn khách hàng", "kiểm kê"],
+        
+        # Nhóm Tài chính / Kế toán / Thuế
+        "accounting": ["hạch toán", "lập báo cáo", "kê khai", "đối chiếu", "quyết toán", "kiểm kê"],
+        "finance": ["thẩm định", "giải ngân", "huy động vốn", "định giá", "kiểm soát rủi ro"],
+        
+        # Nhóm Xây dựng / Sản xuất
+        "construction": ["thi công", "giám sát", "bóc tách khối lượng", "nghiệm thu", "thiết kế bản vẽ"],
+        "manufacturing": ["vận hành", "bảo trì", "kiểm soát chất lượng", "đóng gói", "sản xuất"],
+        
+        # Nhóm Sáng tạo / Thiết kế / Media
+        "design": ["thiết kế", "vẽ", "dựng hình", "phác thảo", "chỉnh sửa", "retouch"],
+        "media_publishing": ["biên tập", "sản xuất", "dẫn chương trình", "thu âm", "lồng tiếng"],
+        
+        # Nhóm Dịch vụ / Nhà hàng / Khách sạn
+        "hospitality": ["đón tiếp", "chuẩn bị", "phục vụ", "pha chế", "đặt phòng", "hướng dẫn"],
+        "customer_service": ["tiếp nhận", "giải đáp", "xử lý khiếu nại", "trực tổng đài", "trải nghiệm khách hàng"]
+    }
+    
+    valid_verbs = general_verbs + industry_verbs.get(industry, [])
     
     skill_confidence = {}
     for skill in skills:
@@ -273,7 +322,7 @@ def verify_skill_context(text: str, skills: list) -> dict:
         for sentence in sentences:
             if skill.lower() in sentence.lower():
                 words = sentence.split()
-                if len(words) > 7 and any(verb in sentence.lower() for verb in action_verbs):
+                if len(words) > 5 and any(verb in sentence.lower() for verb in valid_verbs):
                     confidence = 1.0
                     break
         skill_confidence[skill] = confidence
@@ -366,6 +415,8 @@ def calculate_education_score(cv_edu: str, jd_min_edu: str) -> float:
     return round((cv_rank / jd_rank) * 100, 2)
 
 def score_cv(cv_data: dict, jd_data: dict) -> dict:
+    industry = jd_data.get("industry") or "all"
+    
     jd_required_skills = jd_data.get("required_skills", [])
     jd_preferred_skills = jd_data.get("preferred_skills", [])
     jd_min_yoe = jd_data.get("min_yoe", 0)
@@ -375,13 +426,13 @@ def score_cv(cv_data: dict, jd_data: dict) -> dict:
     cv_raw_text = cv_data.get("raw_text", "")
     cv_skills_list = cv_data.get("skills", [])
     
-    cv_skills = {get_normalized_skill(skill) for skill in cv_skills_list}
+    cv_skills = {get_normalized_skill(skill, industry) for skill in cv_skills_list}
 
-    skill_confidence = verify_skill_context(cv_raw_text, cv_skills_list)
+    skill_confidence = verify_skill_context(cv_raw_text, cv_skills_list, industry=industry)
 
     normalized_skill_exp = {}
     for skill, years in cv_data.get("skill_experience", {}).items():
-        norm = get_normalized_skill(skill)
+        norm = get_normalized_skill(skill, industry)
         normalized_skill_exp[norm] = max(normalized_skill_exp.get(norm, 0.0), years)
 
     cv_skill_exp = normalized_skill_exp
@@ -397,10 +448,11 @@ def score_cv(cv_data: dict, jd_data: dict) -> dict:
     education_score = calculate_education_score(cv_edu, jd_min_edu)
     nlp_score = calculate_cosine_similarity(cv_vector, jd_vector)
 
-    WEIGHT_SKILL = 0.40
-    WEIGHT_NLP = 0.30
-    WEIGHT_EXP = 0.20
-    WEIGHT_EDU = 0.10
+    score_weights = jd_data.get("score_weights") or {}
+    WEIGHT_SKILL = score_weights.get("skills_weight", 0.40)
+    WEIGHT_NLP = score_weights.get("nlp_weight", 0.30)
+    WEIGHT_EXP = score_weights.get("experience_weight", 0.20)
+    WEIGHT_EDU = score_weights.get("education_weight", 0.10)
 
     total_score = (skill_score * WEIGHT_SKILL) + (experience_score * WEIGHT_EXP) + (education_score * WEIGHT_EDU) + (nlp_score * WEIGHT_NLP)
     total_score = min(100.0, total_score)

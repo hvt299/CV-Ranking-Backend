@@ -21,6 +21,7 @@ class Collections:
     NOTIFICATIONS = "notifications"
     CV_VECTORS = "cv_vectors"
     JD_VECTORS = "jd_vectors"
+    AUDIT_LOGS = "audit_logs"
 
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "cv-ranking")
 

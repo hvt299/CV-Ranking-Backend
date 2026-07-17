@@ -46,6 +46,7 @@ class RegisterRequest(UserCreate):
     size: Optional[str] = Field(default=None)
     address: Optional[str] = Field(default=None)
     website: Optional[str] = Field(default=None)
+    invite_token: Optional[str] = Field(default=None, description="Token từ email mời")
 
 class ProfileUpdate(BaseModel):
     full_name: Optional[str] = None
@@ -83,6 +84,7 @@ class SocialAuthRequest(BaseModel):
     size: Optional[str] = Field(default=None)
     address: Optional[str] = Field(default=None)
     website: Optional[str] = Field(default=None)
+    invite_token: Optional[str] = Field(default=None, description="Token từ email mời")
 
 router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
 
@@ -121,6 +123,35 @@ async def _create_company(db, req_data: BaseModel) -> str:
 @limiter.limit("10/day")
 async def register_user(request: Request, response: Response, background_tasks: BackgroundTasks, payload: RegisterRequest = Body(...)):
     db = get_db()
+
+    if payload.invite_token:
+        try:
+            token_data = jwt.decode(payload.invite_token, JWT_SECRET, algorithms=[ALGORITHM])
+            if token_data.get("email") != payload.email:
+                raise HTTPException(status_code=400, detail="Email đăng ký không khớp với email được mời!")
+            
+            existing_user = await db[Collections.USERS].find_one({"email": payload.email})
+            if existing_user:
+                raise HTTPException(status_code=400, detail="Email này đã được đăng ký trên hệ thống!")
+                
+            hashed_pw = get_password_hash(payload.password)
+            auto_avatar = _make_avatar_url(payload.full_name)
+            
+            new_user = {
+                "email": payload.email,
+                "full_name": payload.full_name,
+                "hashed_password": hashed_pw,
+                "avatar": auto_avatar,
+                "original_avatar": auto_avatar,
+                "role": token_data.get("role", UserRole.HR_MEMBER.value),
+                "company_id": token_data.get("company_id"),
+                "is_verified": True,
+                "created_at": datetime.now(timezone.utc),
+            }
+            await db[Collections.USERS].insert_one(new_user)
+            return {"status": "success", "message": "Gia nhập công ty thành công! Bạn có thể đăng nhập ngay."}
+        except jwt.PyJWTError:
+            raise HTTPException(status_code=400, detail="Link mời không hợp lệ hoặc đã hết hạn.")
 
     if payload.role not in SELF_REGISTERABLE_ROLES:
         raise HTTPException(
@@ -346,7 +377,6 @@ async def google_login(request: Request, response: Response, social_request: Soc
 @limiter.limit("10/minute")
 async def linkedin_login(request: Request, response: Response, social_request: SocialAuthRequest = Body(...)):
     try:
-        # Gọi API Lấy UserInfo của LinkedIn (Chuẩn OpenID Connect)
         async with httpx.AsyncClient() as client:
             res = await client.get(
                 "https://api.linkedin.com/v2/userinfo",

@@ -104,7 +104,6 @@ class CompanyDB(CompanyCreate):
     updated_at: Optional[datetime] = None
 
 class CompanyVerifyAction(BaseModel):
-    """Admin dùng để duyệt/từ chối công ty."""
     approve: bool
     rejection_reason: Optional[str] = Field(
         default=None, description="Bắt buộc nếu approve=False"

@@ -11,7 +11,7 @@ def compress_cv_data(raw_text: str, candidate_info: dict, extracted_skills: list
     yoe = candidate_info.get("years_of_experience", 0)
     skills_str = ", ".join(extracted_skills) if extracted_skills else "Không có kỹ năng rõ ràng"
     
-    clean_raw = (raw_text or "").replace("\n", " ")[:2000] 
+    clean_raw = (raw_text or "").replace("\n", " ")[:8000] 
     
     full_cv_context = (
         f"Thông tin tóm tắt: Trình độ {edu}, {yoe} năm kinh nghiệm. Kỹ năng: {skills_str}.\n"
