@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from app.database.config import get_db, Collections
 from app.database.models import ApplicationUpdate, ApplicationStatus, ApplicationSource, NotificationType, NotificationReadStatus
 from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
-from app.services.vector_engine import compress_cv_data, get_embedding, get_top_contributing_sentences
+from app.services.vector_engine import compress_cv_data, get_embedding, get_cv_embeddings, get_top_contributing_sentences
 from app.services.document_forensics import detect_hidden_text
 from app.auth import require_hr, require_hr_or_admin, get_scope_filter, CurrentUser
 from app.middleware.rate_limit import limiter
@@ -77,7 +77,7 @@ async def upload_cv_to_pool(
     file_url = await upload_file_to_cloudinary(content, file.filename)
         
     compressed_text = compress_cv_data(raw_text, cv_data, cv_data.get("skills", []))
-    cv_vector = await get_embedding(compressed_text)
+    cv_vector = await get_cv_embeddings(compressed_text)
     
     pool_record = {
         "filename": file.filename,

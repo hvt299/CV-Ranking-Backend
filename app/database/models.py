@@ -3,6 +3,7 @@ import re
 from enum import Enum
 from typing import List, Optional, Dict
 from datetime import datetime, timezone
+from typing import Any
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -407,7 +408,7 @@ class CVDocumentCreate(BaseModel):
 class CVDocumentDB(CVDocumentCreate):
     id: str
     owner_user_id: str = Field(..., description="Luôn bắt buộc — CV Library thuộc về đúng 1 Applicant")
-    cv_vector_ref: Optional[List[float]] = None
+    cv_vector_ref: Optional[List[Any]] = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: Optional[datetime] = None
 

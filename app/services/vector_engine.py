@@ -1,10 +1,22 @@
 import os
+import re
 import httpx
 import numpy as np
 from dotenv import load_dotenv
 
 load_dotenv()
 COLAB_API_URL = os.getenv("COLAB_API_URL")
+
+def chunk_text(text: str, chunk_size: int = 300, overlap: int = 50) -> list:
+    words = text.split()
+    if len(words) <= chunk_size:
+        return [text]
+
+    chunks = []
+    for i in range(0, len(words), chunk_size - overlap):
+        chunk = " ".join(words[i:i + chunk_size])
+        chunks.append(chunk)
+    return chunks
 
 def compress_cv_data(raw_text: str, candidate_info: dict, extracted_skills: list) -> str:
     edu = candidate_info.get("education_level", "Không có thông tin học vấn")
@@ -66,28 +78,44 @@ async def get_embedding(text: str) -> list:
         print(f"Lỗi kết nối đến Colab Microservice: {e}")
         return []
 
-def calculate_cosine_similarity(vec1: list, vec2: list) -> float:
-    if not vec1 or not vec2:
+async def get_cv_embeddings(text: str) -> list:
+    chunks = chunk_text(text, chunk_size=300, overlap=50)
+    valid_embeddings = []
+    
+    for chunk in chunks:
+        emb = await get_embedding(chunk)
+        if emb:
+            valid_embeddings.append(emb)
+            
+    return valid_embeddings
+
+def calculate_cosine_similarity(cv_vectors: list, jd_vector: list) -> float:
+    if not cv_vectors or not jd_vector:
         return 0.0
         
-    v1 = np.array(vec1).flatten()
-    v2 = np.array(vec2).flatten()
-    
-    if len(v1) == 0 or len(v2) == 0 or len(v1) != len(v2):
-        return 0.0
-    
-    dot_product = np.dot(v1, v2)
-    norm_v1 = np.linalg.norm(v1)
+    if isinstance(cv_vectors[0], (int, float)):
+        cv_vectors = [cv_vectors]
+        
+    v2 = np.array(jd_vector).flatten()
     norm_v2 = np.linalg.norm(v2)
     
-    if norm_v1 == 0 or norm_v2 == 0:
+    if norm_v2 == 0:
         return 0.0
+    
+    max_score = 0.0
+    for vec in cv_vectors:
+        v1 = np.array(vec).flatten()
+        if len(v1) == 0 or len(v1) != len(v2):
+            continue
         
-    similarity = dot_product / (norm_v1 * norm_v2)
-    score = max(0.0, float(similarity) * 100)
-    return round(score, 2)
-
-import re
+        norm_v1 = np.linalg.norm(v1)
+        if norm_v1 == 0:
+            continue
+            
+        similarity = np.dot(v1, v2) / (norm_v1 * norm_v2)
+        max_score = max(max_score, float(similarity) * 100)
+    
+    return round(max_score, 2)
 
 def get_top_contributing_sentences(cv_text: str, jd_text: str, top_k: int = 3) -> list:
     if not cv_text or not jd_text:
