@@ -252,7 +252,8 @@ async def upload_cv_to_library(
     fraud_result = None
     if file.filename.lower().endswith((".pdf", ".docx")):
         fraud_result = detect_hidden_text(content, file.filename)
-    cv_data = analyze_cv_text(raw_text)
+        
+    cv_data = await analyze_cv_text(raw_text)
     
     file_url = await upload_file_to_cloudinary(content, file.filename)
     compressed_text = compress_cv_data(raw_text, cv_data, cv_data.get("skills", []))

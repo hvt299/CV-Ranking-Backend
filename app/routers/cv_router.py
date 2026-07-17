@@ -58,7 +58,7 @@ async def upload_cv_to_pool(
     if file.filename.lower().endswith((".pdf", ".docx")):
         fraud_result = detect_hidden_text(content, file.filename)
 
-    cv_data = analyze_cv_text(raw_text)
+    cv_data = await analyze_cv_text(raw_text)
     candidate_email = cv_data.get("email")
     
     if candidate_email:

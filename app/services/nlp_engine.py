@@ -13,6 +13,7 @@ from fastapi import UploadFile, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
 from app.services.vector_engine import calculate_cosine_similarity
+from app.services.llm_service import extract_cv_metrics_with_llm
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SKILLS_FOLDER = os.path.join(BASE_DIR, "data")
@@ -256,20 +257,33 @@ def extract_education_level(text: str) -> str:
 
     return "Không đề cập"
 
-def analyze_cv_text(text: str) -> Dict:
+async def analyze_cv_text(text: str) -> Dict:
     info = extract_basic_info(text)
     skills = extract_skills(text)
-    yoe, skill_experience = extract_years_of_experience(text) 
-    edu_level = extract_education_level(text)
+    
+    yoe_regex, skill_experience = extract_years_of_experience(text) 
+    edu_level_regex = extract_education_level(text)
     social_links = extract_social_links(text)
+
+    llm_metrics = await extract_cv_metrics_with_llm(text)
+
+    final_yoe = llm_metrics.get("years_of_experience")
+    if final_yoe == 0.0 and yoe_regex > 0.0:
+        final_yoe = yoe_regex
+
+    final_edu = llm_metrics.get("education_level", "Không đề cập")
+    if final_edu == "Không đề cập" and edu_level_regex != "Không đề cập":
+        final_edu = edu_level_regex
 
     return {
         **info,
         "skills": skills,
         "skill_count": len(skills),
-        "years_of_experience": yoe,
+        "years_of_experience": final_yoe,
         "skill_experience": skill_experience,
-        "education_level": edu_level,
+        "education_level": final_edu,
+        "job_hops": llm_metrics.get("job_hops", 1),
+        "gap_months": llm_metrics.get("gap_months", 0),
         "github": social_links["github"],
         "linkedin": social_links["linkedin"],
         "portfolio": social_links["portfolio"]
