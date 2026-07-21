@@ -1,0 +1,7 @@
+industry,category,skill_name,alias1,alias2,alias3,alias4
+TaiXe,Van tai,tai xe lai xe chuyen dung,specialized vehicle driver,,,
+TaiXe,Dua don,tai xe lai xe thue,rental hired driver,,,
+TaiXe,Dua don,dich vu dua don khac,other pickup drop-off service,,,
+TaiXe,Dua don,dich vu dua don san bay,airport transfer service,,,
+TaiXe,Dua don,dich vu dua don hoc sinh,school pickup service,,,
+TaiXe,Dua don,tai xe xe bus,public bus driver,,,
