@@ -1,15 +1,36 @@
+# --- API Framework & Server ---
 fastapi
 uvicorn
 python-multipart
-pdfplumber
-python-docx
+
+# --- Database (MongoDB) ---
 motor
-pydantic[email]
 dnspython
-python-dotenv
+
+# --- Security, Auth & Validation ---
+pydantic[email]
 PyJWT
 passlib[bcrypt]
 bcrypt==4.0.1
+python-dotenv
+
+# --- LLM ---
+google-generativeai
+
+# --- HTTP Clients (Dùng gọi Colab API & Brevo Email) ---
 httpx
 requests
-numpy
+
+# --- NLP Engine & Document Processing (PDF/Word thuần text) ---
+pymupdf
+python-docx
+pdfplumber
+numpy==1.26.4
+
+# --- Rate Limiting & Caching ---
+slowapi
+hiredis
+redis
+
+# --- Cloud Storage ---
+cloudinary==1.38.0
