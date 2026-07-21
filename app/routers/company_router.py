@@ -1,12 +1,11 @@
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Body
 from datetime import datetime, timedelta, timezone
-from typing import List
 from bson import ObjectId
 import jwt
 
 from app.database.config import get_db, Collections
-from app.auth import CurrentUser, require_hr, require_hr_or_admin, JWT_SECRET, ALGORITHM
+from app.auth import CurrentUser, require_hr, JWT_SECRET, ALGORITHM
 from app.database.models import CompanyStatus, UserRole
 from app.services.email_service import send_hr_invite_email
 

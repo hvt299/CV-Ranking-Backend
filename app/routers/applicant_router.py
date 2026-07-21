@@ -3,7 +3,6 @@ from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request
 from pydantic import BaseModel
 from bson import ObjectId
 from datetime import datetime, timezone
-from typing import List
 
 from app.auth import get_current_user, CurrentUser
 from app.database.config import get_db, Collections

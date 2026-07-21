@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Body
 from bson import ObjectId
 import os
-from typing import List
 
 from app.auth import CurrentUser, require_admin
 from app.database.config import get_db, Collections

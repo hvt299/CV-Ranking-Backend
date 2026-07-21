@@ -26,6 +26,7 @@ numpy==1.26.4
 
 # --- Rate Limiting & Caching ---
 slowapi
+hiredis
 redis
 
 # --- Cloud Storage ---

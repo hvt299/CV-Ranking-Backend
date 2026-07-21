@@ -484,6 +484,7 @@ class ApplicationDB(BaseModel):
     notes: List[NoteEntry] = Field(default_factory=list)
     applied_at: datetime = Field(default_factory=utc_now)
     updated_at: Optional[datetime] = None
+    ai_interview_questions: Optional[List[Dict[str, Any]]] = Field(default=None, description="Lưu trữ câu hỏi phỏng vấn do AI sinh ra để tái sử dụng")
 
 class InterviewSchedule(BaseModel):
     interview_time: str = Field(..., description="Thời gian phỏng vấn (VD: 14:00 - 20/10/2026)")

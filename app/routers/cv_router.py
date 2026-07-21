@@ -6,12 +6,13 @@ from pydantic import BaseModel
 from app.database.config import get_db, Collections
 from app.database.models import ApplicationUpdate, ApplicationStatus, ApplicationSource, NotificationType, NotificationReadStatus
 from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
-from app.services.vector_engine import compress_cv_data, get_embedding, get_cv_embeddings, get_top_contributing_sentences
+from app.services.vector_engine import compress_cv_data, get_cv_embeddings, get_top_contributing_sentences
 from app.services.document_forensics import detect_hidden_text
 from app.auth import require_hr, require_hr_or_admin, get_scope_filter, CurrentUser
 from app.middleware.rate_limit import limiter
 from app.services.storage_service import upload_file_to_cloudinary, delete_file_from_cloudinary
 from app.services.email_service import send_interview_email
+from app.services.llm_service import generate_interview_questions
 
 router = APIRouter(prefix="/api/v1/cv", tags=["CV Processing & Talent Pool"])
 
@@ -384,13 +385,60 @@ async def get_recent_applications(scope_filter: dict = Depends(get_scope_filter)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class ViewToggleRequest(BaseModel):
+    is_viewed: bool
+
 @router.patch("/applications/{app_id}/view", dependencies=[Depends(require_hr_or_admin)])
-async def mark_application_viewed(app_id: str, scope_filter: dict = Depends(get_scope_filter)):
+async def toggle_application_viewed(
+    app_id: str, 
+    payload: ViewToggleRequest = Body(...),
+    scope_filter: dict = Depends(get_scope_filter)
+):
     db = get_db()
     result = await db[Collections.APPLICATIONS].update_one(
         {"_id": ObjectId(app_id), **scope_filter},
-        {"$set": {"is_viewed": True, "updated_at": datetime.now(timezone.utc)}}
+        {"$set": {"is_viewed": payload.is_viewed, "updated_at": datetime.now(timezone.utc)}}
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển")
-    return {"status": "success"}
+    return {"status": "success", "is_viewed": payload.is_viewed}
+
+@router.get("/applications/{app_id}/ai-interview", dependencies=[Depends(require_hr_or_admin)])
+async def get_ai_interview_questions(app_id: str, scope_filter: dict = Depends(get_scope_filter)):
+    db = get_db()
+
+    filter_query = {"_id": ObjectId(app_id), **scope_filter}
+    app_record = await db[Collections.APPLICATIONS].find_one(filter_query)
+    if not app_record:
+        raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển này")
+
+    existing_questions = app_record.get("ai_interview_questions")
+    if existing_questions:
+        return {"status": "success", "data": existing_questions}
+
+    cv_id = app_record.get("cv_snapshot", {}).get("cv_document_id")
+    job_id = app_record.get("job_id")
+
+    cv_record = await db[Collections.CVS].find_one({"_id": ObjectId(cv_id)})
+    job_record = await db[Collections.JOBS].find_one({"_id": ObjectId(job_id)})
+
+    if not cv_record or not job_record:
+        raise HTTPException(status_code=400, detail="Dữ liệu CV hoặc JD không tồn tại để sinh câu hỏi")
+
+    cv_text = cv_record.get("raw_text", "")
+    jd_text = job_record.get("jd_search_text", "")
+
+    questions = await generate_interview_questions(cv_text, jd_text)
+
+    if not questions:
+        raise HTTPException(status_code=500, detail="AI đang bận, không thể sinh câu hỏi lúc này")
+
+    await db[Collections.APPLICATIONS].update_one(
+        filter_query,
+        {"$set": {
+            "ai_interview_questions": questions,
+            "updated_at": datetime.now(timezone.utc)
+        }}
+    )
+
+    return {"status": "success", "data": questions}

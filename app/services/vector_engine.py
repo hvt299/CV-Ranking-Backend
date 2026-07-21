@@ -121,18 +121,29 @@ def get_top_contributing_sentences(cv_text: str, jd_text: str, top_k: int = 3) -
     if not cv_text or not jd_text:
         return []
         
-    sentences = re.split(r'(?<=[.!?\n])\s+', cv_text.replace('\n', ' '))
+    clean_cv = re.sub(r'(?i)(©\s*topcv\.vn|topcv|https?://\S+|[\w\.-]+@[\w\.-]+)', '', cv_text)
+    clean_cv = re.sub(r'[•●✓✔\uf0b7\uf0d8\u2022\-\*]', '.', clean_cv)
+    
+    sentences = re.split(r'(?<=[.!?])\s+|\n+', clean_cv)
     jd_words = set(re.findall(r'\w+', jd_text.lower()))
     
+    seen = set()
     scored_sentences = []
+    
     for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence or len(sentence) < 30 or len(sentence) > 300:
+            continue
+            
         words = re.findall(r'\w+', sentence.lower())
-        if len(words) < 6:
+        if len(words) < 8 or len(words) > 50:
             continue
             
         overlap = sum(1 for w in words if w in jd_words)
-        if overlap > 0:
-            scored_sentences.append((overlap, sentence.strip()))
+        
+        if overlap >= 3 and sentence not in seen:
+            seen.add(sentence)
+            scored_sentences.append((overlap, sentence))
        
     scored_sentences.sort(key=lambda x: x[0], reverse=True)
     return [s[1] for s in scored_sentences[:top_k]]

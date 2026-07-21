@@ -81,3 +81,67 @@ async def extract_cv_metrics_with_llm(raw_text: str) -> dict:
     except Exception as parse_error:
         logger.error(f"Lỗi parse JSON từ LLM: {parse_error}")
         return fallback_data
+
+async def generate_interview_questions(cv_text: str, jd_text: str) -> list:
+    if not GEMINI_API_KEY:
+        logger.warning("Chưa cấu hình GEMINI_API_KEY. Không thể sinh câu hỏi.")
+        return []
+
+    safe_cv = (cv_text or "")[:8000]
+    safe_jd = (jd_text or "")[:4000]
+
+    prompt = f"""
+    Bạn là một chuyên gia phỏng vấn tuyển dụng (Technical/HR Interviewer) cấp cao cực kỳ khắt khe.
+    Nhiệm vụ của bạn là đối chiếu Yêu cầu công việc (JD) và Hồ sơ ứng viên (CV) dưới đây. Hãy tìm ra các ĐIỂM YẾU, LỖ HỔNG KINH NGHIỆM hoặc NHỮNG ĐIỂM ĐÁNG NGỜ trong CV so với JD.
+    Từ đó, sinh ra đúng 4 câu hỏi phỏng vấn thực chiến, hóc búa để HR hỏi ứng viên nhằm kiểm tra năng lực thực sự.
+
+    JD (Yêu cầu công việc):
+    {safe_jd}
+
+    CV (Hồ sơ ứng viên):
+    {safe_cv}
+
+    YÊU CẦU ĐẦU RA: CHỈ TRẢ VỀ JSON ARRAY chuẩn (không markdown ```json, không giải thích thêm).
+    Cấu trúc JSON bắt buộc:
+    [
+        {{
+            "question": "Nội dung câu hỏi xoáy sâu vào điểm yếu/kinh nghiệm...",
+            "reason": "Lý do hỏi câu này (chỉ ra lỗ hổng cụ thể nào trong CV so với JD)...",
+            "suggested_answer": "Gợi ý ngắn gọn cho HR cách đánh giá câu trả lời của ứng viên (Dấu hiệu đỗ/trượt)..."
+        }}
+    ]
+    """
+
+    try:
+        generation_config = genai.GenerationConfig(
+            response_mime_type="application/json",
+            temperature=0.4
+        )
+        
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        response = await model.generate_content_async(prompt, generation_config=generation_config)
+        
+    except Exception as e:
+        logger.warning(f"Gemini 2.5 Flash thất bại khi sinh câu hỏi ({e}). Thử lại với 2.0 Flash...")
+        try:
+            model = genai.GenerativeModel('gemini-2.0-flash')
+            response = await model.generate_content_async(prompt, generation_config=generation_config)
+        except Exception as e2:
+            logger.error(f"Cả 2 model Gemini đều thất bại: {e2}")
+            return []
+
+    try:
+        raw_output = response.text or "[]"
+        first_bracket = raw_output.find('[')
+        last_bracket = raw_output.rfind(']')
+        
+        if first_bracket != -1 and last_bracket != -1:
+            clean_json = raw_output[first_bracket:last_bracket+1]
+            questions = json.loads(clean_json)
+            return questions
+        else:
+            raise ValueError("Không tìm thấy cấu trúc JSON Array trong phản hồi")
+            
+    except Exception as parse_error:
+        logger.error(f"Lỗi parse JSON câu hỏi từ LLM: {parse_error}")
+        return []

@@ -74,10 +74,18 @@ class ResetPasswordRequest(BaseModel):
         return validate_strong_password(v)
 
 class SocialAuthRequest(BaseModel):
-    access_token: str
+    access_token: Optional[str] = Field(
+        default=None, description="Dùng cho Google — access_token thật lấy từ @react-oauth/google."
+    )
+    code: Optional[str] = Field(
+        default=None, description="Dùng cho LinkedIn — authorization code, backend sẽ tự exchange lấy access_token."
+    )
+    redirect_uri: Optional[str] = Field(
+        default=None, description="Bắt buộc kèm theo 'code' của LinkedIn — phải khớp redirect_uri lúc xin code."
+    )
     role: Optional[UserRole] = None
     company_name: Optional[str] = Field(
-        default=None, description="Bắt buộc nếu role=hr_owner và là user mới qua Google."
+        default=None, description="Bắt buộc nếu role=hr_owner và là user mới qua Google/LinkedIn."
     )
     tax_code: Optional[str] = Field(default=None)
     industry: Optional[str] = Field(default=None)
@@ -373,14 +381,63 @@ async def google_login(request: Request, response: Response, social_request: Soc
     except ValueError:
         raise HTTPException(status_code=401, detail="Token từ Google không hợp lệ hoặc đã hết hạn")
 
+# =====================================================================
+# LINKEDIN OAUTH
+# =====================================================================
+
+LINKEDIN_CLIENT_ID = os.getenv("LINKEDIN_CLIENT_ID", "")
+LINKEDIN_CLIENT_SECRET = os.getenv("LINKEDIN_CLIENT_SECRET", "")
+
+
+async def _exchange_linkedin_code(code: str, redirect_uri: str) -> str:
+    """
+    Đổi authorization code lấy access_token thật từ LinkedIn.
+    Bắt buộc thực hiện ở server vì cần client_secret.
+    """
+    async with httpx.AsyncClient() as client:
+        token_res = await client.post(
+            "https://www.linkedin.com/oauth/v2/accessToken",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": LINKEDIN_CLIENT_ID,
+                "client_secret": LINKEDIN_CLIENT_SECRET,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+    if token_res.status_code != 200:
+        raise ValueError(f"Không thể đổi mã LinkedIn lấy access_token: {token_res.text}")
+
+    token_data = token_res.json()
+    access_token = token_data.get("access_token")
+    if not access_token:
+        raise ValueError("Phản hồi từ LinkedIn không chứa access_token")
+
+    return access_token
+
+
 @router.post("/linkedin")
 @limiter.limit("10/minute")
 async def linkedin_login(request: Request, response: Response, social_request: SocialAuthRequest = Body(...)):
     try:
+        # Bước 1: đổi code (nhận từ frontend) lấy access_token thật
+        if not social_request.code or not social_request.redirect_uri:
+            raise HTTPException(
+                status_code=400,
+                detail="Thiếu 'code' hoặc 'redirect_uri' để xác thực LinkedIn.",
+            )
+
+        access_token = await _exchange_linkedin_code(
+            social_request.code, social_request.redirect_uri
+        )
+
+        # Bước 2: dùng access_token thật để lấy userinfo
         async with httpx.AsyncClient() as client:
             res = await client.get(
                 "https://api.linkedin.com/v2/userinfo",
-                headers={"Authorization": f"Bearer {social_request.access_token}"}
+                headers={"Authorization": f"Bearer {access_token}"}
             )
             if res.status_code != 200:
                 raise ValueError("Token LinkedIn không hợp lệ")
@@ -452,11 +509,12 @@ async def linkedin_login(request: Request, response: Response, social_request: S
                 await db[Collections.USERS].update_one({"_id": user["_id"]}, {"$set": update_fields})
                 user.update(update_fields)
 
-        access_token = create_access_token(build_token_payload(user))
-        return {"access_token": access_token, "token_type": "bearer"}
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Token từ LinkedIn không hợp lệ hoặc đã hết hạn")
+        access_token_jwt = create_access_token(build_token_payload(user))
+        return {"access_token": access_token_jwt, "token_type": "bearer"}
 
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e) or "Token từ LinkedIn không hợp lệ hoặc đã hết hạn")
+    
 # =====================================================================
 # PROFILE
 # =====================================================================
