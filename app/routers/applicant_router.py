@@ -66,17 +66,33 @@ async def list_open_jobs():
         result.append({
             "id": str(job["_id"]),
             "title": job.get("title"),
+            "company_id": job.get("company_id"),
             "company_name": company_name,
+
+            "status": job.get("status"),
+            "is_hot": job.get("is_hot", False),
+            "industry": job.get("industry"),
+
             "job_level": job.get("job_level"),
-            "work_mode": job.get("work_mode"),
             "employment_type": job.get("employment_type"),
+            "work_mode": job.get("work_mode"),
+
+            "headcount": job.get("headcount"),
+            "min_yoe": job.get("min_yoe"),
+
             "location": job.get("location"),
             "salary": job.get("salary"),
             "deadline": job.get("deadline"),
+            "education": job.get("education"),
+
             "description": job.get("description"),
             "requirements": job.get("requirements"),
             "benefits": job.get("benefits"),
-            "required_skills": [s.get("name") for s in job.get("required_skills", [])],
+
+            "required_skills": [
+                s.get("name") for s in job.get("required_skills", [])
+            ],
+
             "created_at": job.get("created_at"),
         })
     return result
