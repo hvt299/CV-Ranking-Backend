@@ -1,0 +1,59 @@
+from enum import Enum
+from datetime import datetime, timezone
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+class UserRole(str, Enum):
+    ADMIN = "admin"
+    HR_OWNER = "hr_owner"
+    HR_MEMBER = "hr_member"
+    APPLICANT = "applicant"
+
+class JobStatus(str, Enum):
+    DRAFT = "draft"
+    OPEN = "open"
+    PAUSED = "paused"
+    CLOSED = "closed"
+    EXPIRED = "expired"
+
+class ApplicationStatus(str, Enum):
+    NEW = "new"
+    REVIEWING = "reviewing"
+    INTERVIEW = "interview"
+    OFFERED = "offered"
+    HIRED = "hired"
+    REJECTED = "rejected"
+    WITHDRAWN = "withdrawn"
+    EXPIRED = "expired"
+
+class ApplicationSource(str, Enum):
+    HR_SOURCED = "hr_sourced"
+    APPLICANT_APPLY = "applicant_apply"
+
+class NotificationType(str, Enum):
+    INFO = "info"
+    SUCCESS = "success"
+    WARNING = "warning"
+    ERROR = "error"
+
+class NotificationReadStatus(str, Enum):
+    UNREAD = "unread"
+    READ = "read"
+
+class CompanyStatus(str, Enum):
+    PENDING_VERIFICATION = "pending_verification"
+    VERIFIED = "verified"
+    SUSPENDED = "suspended"
+    REJECTED = "rejected"
+
+class AuditAction(str, Enum):
+    COMPANY_VERIFIED = "company_verified"
+    COMPANY_REJECTED = "company_rejected"
+    COMPANY_SUSPENDED = "company_suspended"
+    APPLICATION_STATUS_CHANGED = "application_status_changed"
+    APPLICATION_NOTE_ADDED = "application_note_added"
+    JOB_WEIGHTS_CHANGED = "job_weights_changed"
+    HR_MEMBER_INVITED = "hr_member_invited"
+    HR_MEMBER_REMOVED = "hr_member_removed"
+    USER_SUSPENDED = "user_suspended"

@@ -9,7 +9,8 @@ from pydantic import BaseModel, EmailStr
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
-from app.database.models import UserRole
+from app.schemas.common_schema import UserRole
+from app.repositories.user_repository import UserRepository
 
 JWT_SECRET = os.getenv("JWT_SECRET", "CVRanking@JWT")
 ALGORITHM = "HS256"
@@ -63,11 +64,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> CurrentUser:
     except jwt.PyJWTError:
         raise credentials_exception
 
-    from app.database.config import get_db, Collections
-    from bson import ObjectId
-    
-    db = get_db()
-    user = await db[Collections.USERS].find_one({"_id": ObjectId(user_id)})
+    user = await UserRepository.get_by_id(user_id)
     
     if not user:
         raise credentials_exception

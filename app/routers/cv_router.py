@@ -3,12 +3,19 @@ from bson import ObjectId
 from datetime import datetime, timezone
 from pydantic import BaseModel
 
-from app.database.config import get_db, Collections
-from app.database.models import ApplicationUpdate, ApplicationStatus, ApplicationSource, NotificationType, NotificationReadStatus
+from app.database.config import Collections
+from app.schemas.application_schema import ApplicationUpdate
+from app.schemas.common_schema import ApplicationStatus, ApplicationSource, NotificationType, NotificationReadStatus
+from app.repositories.job_repository import JobRepository
+from app.repositories.company_repository import CompanyRepository
+from app.repositories.application_repository import ApplicationRepository
+from app.repositories.cv_repository import CVRepository
+from app.repositories.notification_repository import NotificationRepository
+
 from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
 from app.services.vector_engine import compress_cv_data, get_cv_embeddings, get_top_contributing_sentences
 from app.services.document_forensics import detect_hidden_text
-from app.auth import require_hr, require_hr_or_admin, get_scope_filter, CurrentUser
+from app.core.security import require_hr, require_hr_or_admin, get_scope_filter, CurrentUser
 from app.middleware.rate_limit import limiter
 from app.services.storage_service import upload_file_to_cloudinary, delete_file_from_cloudinary
 from app.services.email_service import send_interview_email
@@ -41,7 +48,6 @@ async def upload_cv_to_pool(
     file: UploadFile = File(..., description="File CV định dạng PDF hoặc DOCX"),
     current_user: CurrentUser = Depends(require_hr)
 ):
-    db = get_db()
     content = await file.read()
     
     if len(content) > MAX_FILE_SIZE:
@@ -63,10 +69,7 @@ async def upload_cv_to_pool(
     candidate_email = cv_data.get("email")
     
     if candidate_email:
-        existing_cv = await db[Collections.CVS].find_one({
-            "company_id": current_user.company_id, 
-            "candidate_info.email": candidate_email
-        })
+        existing_cv = await CVRepository.find_one({"company_id": current_user.company_id, "candidate_info.email": candidate_email})
         if existing_cv:
             return {
                 "message": "CV đã tồn tại trong Kho hồ sơ của công ty",
@@ -102,11 +105,11 @@ async def upload_cv_to_pool(
         "created_at": datetime.now(timezone.utc)
     }
 
-    result = await db[Collections.CVS].insert_one(pool_record)
+    cv_id = await CVRepository.create(pool_record)
 
     return {
         "message": "Tải CV lên Kho hồ sơ (Talent Pool) thành công",
-        "cv_id": str(result.inserted_id),
+        "cv_id": str(cv_id),
         "candidate_email": candidate_email,
         "is_existing": False
     }
@@ -118,12 +121,10 @@ async def map_cv_to_job(
     current_user: CurrentUser = Depends(require_hr),
     scope_filter: dict = Depends(get_scope_filter)
 ):
-    db = get_db()
     job_id = payload.job_id
     
     try:
-        job_filter = {"_id": ObjectId(job_id), **scope_filter}
-        jd_data = await db[Collections.JOBS].find_one(job_filter)
+        jd_data = await JobRepository.find_one({"_id": ObjectId(payload.job_id), **scope_filter})
     except:
         raise HTTPException(status_code=400, detail="Mã Job ID không hợp lệ")
         
@@ -146,15 +147,11 @@ async def map_cv_to_job(
                 detail=f"Chiến dịch đã hết hạn vào {deadline_dt.strftime('%d/%m/%Y %H:%M')} (UTC)"
             )
         
-    cv_filter = {"_id": ObjectId(cv_id), **scope_filter}
-    cv_record = await db[Collections.CVS].find_one(cv_filter)
+    cv_record = await CVRepository.find_one({"_id": ObjectId(cv_id), **scope_filter})
     if not cv_record:
         raise HTTPException(status_code=404, detail="Không tìm thấy CV trong Kho hồ sơ")
 
-    existing_app = await db[Collections.APPLICATIONS].find_one({
-        "job_id": job_id,
-        "cv_snapshot.cv_document_id": cv_id
-    })
+    existing_app = await ApplicationRepository.find_one({"job_id": payload.job_id, "cv_snapshot.cv_document_id": cv_id})
     if existing_app:
         raise HTTPException(status_code=400, detail="Hồ sơ này đã được đưa vào chiến dịch này rồi!")
 
@@ -198,11 +195,11 @@ async def map_cv_to_job(
         "applied_at": datetime.now(timezone.utc)
     }
 
-    result = await db[Collections.APPLICATIONS].insert_one(application_record)
+    app_id = await ApplicationRepository.create(application_record)
 
     return {
         "message": "Ghép nối CV vào chiến dịch và chấm điểm thành công",
-        "application_id": str(result.inserted_id),
+        "application_id": str(app_id),
         "ai_score": scoring_result
     }
 
@@ -213,11 +210,9 @@ async def update_application_status(
     update_data: ApplicationUpdate = Body(...),
     scope_filter: dict = Depends(get_scope_filter)
 ):
-    db = get_db()
-    
     try:
         filter_query = {"_id": ObjectId(app_id), **scope_filter}
-        current_app = await db[Collections.APPLICATIONS].find_one(filter_query)
+        current_app = await ApplicationRepository.find_one(filter_query)
         if not current_app:
             raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển này")
             
@@ -233,18 +228,18 @@ async def update_application_status(
             return {"message": "Không có dữ liệu mới nào để cập nhật"}
 
         update_query["$set"]["updated_at"] = datetime.now(timezone.utc)
-        result = await db[Collections.APPLICATIONS].update_one(filter_query, update_query) 
+        await ApplicationRepository.update_by_query(filter_query, update_query)
         
         if update_data.status is not None and update_data.status.value != current_app.get("status"):
             applicant_user_id = current_app.get("applicant_user_id")
-            job = await db[Collections.JOBS].find_one({"_id": ObjectId(current_app["job_id"])})
+            job = await JobRepository.get_by_id(current_app["job_id"])
             
             if update_data.status.value == ApplicationStatus.INTERVIEW.value and update_data.send_email and update_data.interview_schedule:
                 candidate_email = current_app.get("cv_snapshot", {}).get("candidate_info", {}).get("email")
                 candidate_name = current_app.get("cv_snapshot", {}).get("display_name", current_app.get("cv_snapshot", {}).get("filename", "Ứng viên"))
                 
                 if candidate_email:
-                    company = await db[Collections.COMPANIES].find_one({"_id": ObjectId(current_app["company_id"])})
+                    company = await CompanyRepository.get_by_id(current_app["company_id"])
                     company_name = company.get("name", "Công ty của chúng tôi") if company else "Công ty của chúng tôi"
                     job_title = job.get("title", "Vị trí tuyển dụng") if job else "Vị trí tuyển dụng"
                     
@@ -277,8 +272,8 @@ async def update_application_status(
                     "application_status_snapshot": update_data.status.value,
                     "created_at": datetime.now(timezone.utc)
                 }
-                
-                await db[Collections.NOTIFICATIONS].insert_one(notification)
+
+                await NotificationRepository.create(notification)
 
         return {"status": "success", "message": "Đã cập nhật trạng thái ứng viên thành công"}
     except Exception as e:
@@ -286,10 +281,8 @@ async def update_application_status(
 
 @router.delete("/{cv_id}", dependencies=[Depends(require_hr_or_admin)])
 async def delete_cv_from_pool(cv_id: str, scope_filter: dict = Depends(get_scope_filter)):
-    db = get_db()
     try:
-        filter_query = {"_id": ObjectId(cv_id), **scope_filter}
-        cv_record = await db[Collections.CVS].find_one(filter_query)
+        cv_record = await CVRepository.find_one({"_id": ObjectId(cv_id), **scope_filter})
         
         if not cv_record:
             raise HTTPException(status_code=404, detail="Không tìm thấy CV trong kho hoặc từ chối quyền truy cập")
@@ -297,9 +290,8 @@ async def delete_cv_from_pool(cv_id: str, scope_filter: dict = Depends(get_scope
         if cv_record.get("file_url"):
             await delete_file_from_cloudinary(cv_record["file_url"])
 
-        await db[Collections.CVS].delete_one(filter_query)
-        
-        await db[Collections.APPLICATIONS].delete_many({"cv_snapshot.cv_document_id": cv_id})
+        await CVRepository.delete(cv_id, scope_filter)
+        await ApplicationRepository.delete_many({"cv_snapshot.cv_document_id": cv_id})
             
         return {"status": "success", "message": "Đã xóa vĩnh viễn CV khỏi hệ thống"}
     except Exception as e:
@@ -307,11 +299,8 @@ async def delete_cv_from_pool(cv_id: str, scope_filter: dict = Depends(get_scope
 
 @router.get("/pool", dependencies=[Depends(require_hr_or_admin)])
 async def get_talent_pool(scope_filter: dict = Depends(get_scope_filter)):
-    db = get_db()
     try:
-        projection = {"raw_text": 0, "cv_vector_ref": 0}
-        cursor = db[Collections.CVS].find(scope_filter, projection).sort("created_at", -1)
-        cvs = await cursor.to_list(length=500)
+        cvs = await CVRepository.find_all(scope_filter, projection={"raw_text": 0, "cv_vector_ref": 0}, limit=500)
         
         for cv in cvs:
             cv["id"] = str(cv["_id"])
@@ -321,15 +310,11 @@ async def get_talent_pool(scope_filter: dict = Depends(get_scope_filter)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @router.delete("/applications/{app_id}", dependencies=[Depends(require_hr_or_admin)])
 async def remove_application_from_job(app_id: str, scope_filter: dict = Depends(get_scope_filter)):
-    db = get_db()
     try:
-        filter_query = {"_id": ObjectId(app_id), **scope_filter}
-        result = await db[Collections.APPLICATIONS].delete_one(filter_query)
-        
-        if result.deleted_count == 0:
+        deleted_count = await ApplicationRepository.delete(app_id, scope_filter)
+        if deleted_count == 0:
             raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển này")
             
         return {"status": "success", "message": "Đã gỡ CV khỏi chiến dịch thành công"}
@@ -338,7 +323,6 @@ async def remove_application_from_job(app_id: str, scope_filter: dict = Depends(
 
 @router.get("/applications/recent", dependencies=[Depends(require_hr_or_admin)])
 async def get_recent_applications(scope_filter: dict = Depends(get_scope_filter)):
-    db = get_db()
     try:
         pipeline = []
         if scope_filter:
@@ -361,7 +345,7 @@ async def get_recent_applications(scope_filter: dict = Depends(get_scope_filter)
             {"$unwind": {"path": "$job_info", "preserveNullAndEmptyArrays": True}}
         ])
         
-        applications = await db[Collections.APPLICATIONS].aggregate(pipeline).to_list(length=100)
+        applications = await ApplicationRepository.aggregate_applications(pipeline)
         
         result = []
         for app in applications:
@@ -394,21 +378,18 @@ async def toggle_application_viewed(
     payload: ViewToggleRequest = Body(...),
     scope_filter: dict = Depends(get_scope_filter)
 ):
-    db = get_db()
-    result = await db[Collections.APPLICATIONS].update_one(
+    modified = await ApplicationRepository.update_by_query(
         {"_id": ObjectId(app_id), **scope_filter},
         {"$set": {"is_viewed": payload.is_viewed, "updated_at": datetime.now(timezone.utc)}}
     )
-    if result.matched_count == 0:
+    if modified == 0:
         raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển")
     return {"status": "success", "is_viewed": payload.is_viewed}
 
 @router.get("/applications/{app_id}/ai-interview", dependencies=[Depends(require_hr_or_admin)])
 async def get_ai_interview_questions(app_id: str, scope_filter: dict = Depends(get_scope_filter)):
-    db = get_db()
-
     filter_query = {"_id": ObjectId(app_id), **scope_filter}
-    app_record = await db[Collections.APPLICATIONS].find_one(filter_query)
+    app_record = await ApplicationRepository.find_one(filter_query)
     if not app_record:
         raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển này")
 
@@ -419,8 +400,8 @@ async def get_ai_interview_questions(app_id: str, scope_filter: dict = Depends(g
     cv_id = app_record.get("cv_snapshot", {}).get("cv_document_id")
     job_id = app_record.get("job_id")
 
-    cv_record = await db[Collections.CVS].find_one({"_id": ObjectId(cv_id)})
-    job_record = await db[Collections.JOBS].find_one({"_id": ObjectId(job_id)})
+    cv_record = await CVRepository.get_by_id(cv_id)
+    job_record = await JobRepository.get_by_id(job_id)
 
     if not cv_record or not job_record:
         raise HTTPException(status_code=400, detail="Dữ liệu CV hoặc JD không tồn tại để sinh câu hỏi")
@@ -433,12 +414,6 @@ async def get_ai_interview_questions(app_id: str, scope_filter: dict = Depends(g
     if not questions:
         raise HTTPException(status_code=500, detail="AI đang bận, không thể sinh câu hỏi lúc này")
 
-    await db[Collections.APPLICATIONS].update_one(
-        filter_query,
-        {"$set": {
-            "ai_interview_questions": questions,
-            "updated_at": datetime.now(timezone.utc)
-        }}
-    )
+    await ApplicationRepository.update_by_query(filter_query, {"$set": {"ai_interview_questions": questions, "updated_at": datetime.now(timezone.utc)}})
 
     return {"status": "success", "data": questions}

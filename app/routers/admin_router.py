@@ -1,12 +1,15 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Body
-from bson import ObjectId
 import os
 
-from app.auth import CurrentUser, require_admin
-from app.database.config import get_db, Collections
-from app.database.models import UserRole, CompanyVerifyAction, CompanyStatus, AuditAction
+from app.core.security import CurrentUser, require_admin
+from app.schemas.common_schema import UserRole, CompanyStatus, AuditAction
+from app.schemas.company_schema import CompanyVerifyAction
+from app.repositories.user_repository import UserRepository
+from app.repositories.company_repository import CompanyRepository
+from app.repositories.audit_repository import AuditRepository
+
 from pydantic import BaseModel, Field, EmailStr
 from app.services.audit_service import log_action
 
@@ -27,26 +30,23 @@ async def bootstrap_admin(payload: BootstrapRequest):
     if payload.secret != BOOTSTRAP_SECRET:
         raise HTTPException(status_code=403, detail="Secret không đúng")
         
-    db = get_db()
-    result = await db[Collections.USERS].update_one(
+    modified_count = await UserRepository.update_custom(
         {"email": payload.email}, 
         {"$set": {"role": UserRole.ADMIN.value}}
     )
-    if result.matched_count == 0:
+    if modified_count == 0:
         raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản")
         
     return {"status": "success", "message": f"{payload.email} đã được set làm Admin"}
 
 @router.get("/users", dependencies=[Depends(require_admin)])
 async def list_users():
-    db = get_db()
     projection = {
         "hashed_password": 0, 
         "reset_password_token": 0, 
         "reset_password_expires": 0
     }
-    cursor = db[Collections.USERS].find({}, projection)
-    users = await cursor.to_list(length=500)
+    users = await UserRepository.find_all({}, projection=projection, limit=500)
     
     result = []
     for u in users:
@@ -57,27 +57,21 @@ async def list_users():
     return result
 
 @router.patch("/users/{user_id}/role", dependencies=[Depends(require_admin)])
-async def update_user_role(user_id: str, payload: UpdateRoleRequest): 
-    db = get_db()
-    result = await db[Collections.USERS].update_one(
-        {"_id": ObjectId(user_id)},
-        {"$set": {"role": payload.role.value}}
-    )
+async def update_user_role(user_id: str, payload: UpdateRoleRequest):
+    modified_count = await UserRepository.update(user_id, {"role": payload.role.value})
     
-    if result.matched_count == 0:
+    if modified_count == 0:
         raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
         
     return {"status": "success", "message": f"Đã cập nhật role thành '{payload.role.value}'"}
 
 @router.get("/companies", dependencies=[Depends(require_admin)])
 async def list_companies(status: str = None):
-    db = get_db()
     query = {}
     if status:
         query["status"] = status
         
-    cursor = db[Collections.COMPANIES].find(query).sort("created_at", -1)
-    companies = await cursor.to_list(length=500)
+    companies = await CompanyRepository.find_all(query, limit=500)
     
     result = []
     for c in companies:
@@ -91,9 +85,7 @@ async def verify_company(
     company_id: str, 
     action: CompanyVerifyAction,
     current_admin: CurrentUser = Depends(require_admin)
-):
-    db = get_db()
-    
+):    
     new_status = CompanyStatus.VERIFIED.value if action.approve else CompanyStatus.REJECTED.value
     
     update_data = {
@@ -105,12 +97,9 @@ async def verify_company(
     if not action.approve:
         update_data["rejection_reason"] = action.rejection_reason
         
-    result = await db[Collections.COMPANIES].update_one(
-        {"_id": ObjectId(company_id)},
-        {"$set": update_data}
-    )
+    modified_count = await CompanyRepository.update(company_id, update_data)
     
-    if result.matched_count == 0:
+    if modified_count == 0:
         raise HTTPException(status_code=404, detail="Không tìm thấy công ty")
 
     audit_action = AuditAction.COMPANY_VERIFIED if action.approve else AuditAction.COMPANY_REJECTED
@@ -129,9 +118,7 @@ async def verify_company(
 
 @router.get("/audit-logs", dependencies=[Depends(require_admin)])
 async def get_audit_logs():
-    db = get_db()
-    cursor = db[Collections.AUDIT_LOGS].find({}).sort("created_at", -1).limit(200)
-    logs = await cursor.to_list(length=200)
+    logs = await AuditRepository.find_all({}, limit=200)
     
     result = []
     for lg in logs:
@@ -142,20 +129,14 @@ async def get_audit_logs():
 
 @router.patch("/companies/{company_id}", dependencies=[Depends(require_admin)])
 async def admin_update_company(company_id: str, update_data: dict = Body(...)):
-    db = get_db()
-    
     allowed_fields = ["name", "tax_code", "industry", "size", "website", "address", "license_file_url"]
     clean_data = {k: v for k, v in update_data.items() if k in allowed_fields}
     
     if not clean_data:
         return {"status": "success"}
         
-    result = await db[Collections.COMPANIES].update_one(
-        {"_id": ObjectId(company_id)},
-        {"$set": clean_data}
-    )
-    
-    if result.matched_count == 0:
+    modified_count = await CompanyRepository.update(company_id, clean_data)
+    if modified_count == 0:
         raise HTTPException(status_code=404, detail="Không tìm thấy công ty")
         
     return {"status": "success", "message": "Cập nhật thành công"}
