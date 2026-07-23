@@ -109,9 +109,17 @@ async def get_my_jobs(scope_filter: dict = Depends(get_scope_filter)):
         
     return result
 
+from bson import ObjectId
+from fastapi import HTTPException, Depends
+
 @router.get("/{job_id}", response_model=JobResponse, dependencies=[Depends(require_hr_or_admin)])
 async def get_job_detail(job_id: str, scope_filter: dict = Depends(get_scope_filter)):
-    job = await JobRepository.find_one({"_id": job_id, **scope_filter})
+    try:
+        obj_id = ObjectId(job_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Định dạng ID không hợp lệ")
+
+    job = await JobRepository.find_one({"_id": obj_id, **scope_filter})
     if not job:
         raise HTTPException(status_code=404, detail="Không tìm thấy chiến dịch hoặc bạn không có quyền xem")
         
