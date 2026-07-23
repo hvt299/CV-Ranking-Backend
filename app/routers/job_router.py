@@ -258,3 +258,52 @@ async def get_dashboard_analytics(scope_filter: dict = Depends(get_scope_filter)
         "total_cvs_in_pool": total_cvs_in_pool,
         "status_breakdown": status_breakdown
     }
+
+# ==========================================
+# PUBLIC API (DÀNH CHO KHÁCH VÃNG LAI)
+# ==========================================
+
+@router.get("/public/list", response_model=List[JobResponse])
+async def get_public_jobs():
+    pipeline = [
+        {"$match": {"status": JobStatus.OPEN.value}},
+        {"$sort": {"created_at": -1}},
+        {"$limit": 100},
+        {
+            "$lookup": {
+                "from": Collections.COMPANIES,
+                "let": {"c_id": {"$toObjectId": "$company_id"}},
+                "pipeline": [
+                    {"$match": {"$expr": {"$eq": ["$_id", "$$c_id"]}}},
+                    {"$project": {"name": 1}}
+                ],
+                "as": "company_info"
+            }
+        },
+        {"$unwind": {"path": "$company_info", "preserveNullAndEmptyArrays": True}}
+    ]
+    
+    jobs = await JobRepository.aggregate_jobs(pipeline)
+    
+    result = []
+    for job in jobs:
+        job["id"] = str(job["_id"])
+        job["company_name"] = job.get("company_info", {}).get("name", "Công ty Ẩn danh")
+        job.pop("company_info", None)
+        result.append(job)
+        
+    return result
+
+@router.get("/public/{job_id}", response_model=JobResponse)
+async def get_public_job_detail(job_id: str):
+    try:
+        obj_id = ObjectId(job_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Định dạng ID không hợp lệ")
+
+    job = await JobRepository.find_one({"_id": obj_id, "status": JobStatus.OPEN.value})
+    if not job:
+        raise HTTPException(status_code=404, detail="Không tìm thấy việc làm hoặc chiến dịch đã đóng")
+        
+    job["id"] = str(job["_id"])
+    return job
