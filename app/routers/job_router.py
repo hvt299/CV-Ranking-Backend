@@ -147,7 +147,11 @@ async def update_job(
     if not existing_job:
         raise HTTPException(status_code=404, detail="Không tìm thấy Job hoặc bạn không có quyền chỉnh sửa")
 
-    update_data = job_update.model_dump()
+    update_data = job_update.model_dump(exclude_unset=True)
+    
+    if current_user.role != UserRole.ADMIN:
+        update_data.pop("is_hot", None)
+
     compressed_jd = compress_jd_data(update_data)
     
     new_jd_vector = await get_embedding(compressed_jd)
