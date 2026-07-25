@@ -1,30 +1,23 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional
+from typing import Optional, List
 import re
+from app.schemas.shared_schema import LocationDetail, KYCDocument
 
 class CompanyCreate(BaseModel):
-    name: str = Field(
-        ...,
-        example="TechCorp VN"
-    )
-    tax_code: str = Field(
-        ...,
-        description="Mã số thuế doanh nghiệp — bắt buộc để xác minh"
-    )
-    industry: Optional[str] = Field(
-        default=None,
-        description="Ngành nghề chính của công ty (VD: CNTT, Xây dựng, Y tế, Kế toán...)"
-    )
-    size: Optional[str] = Field(
-        default=None,
-        example="50-100 nhân sự"
-    )
+    name: str = Field(..., example="TechCorp VN")
+    tax_code: str = Field(..., description="Mã số thuế doanh nghiệp — bắt buộc để xác minh")
+    industry: Optional[str] = Field(default=None, description="Ngành nghề chính của công ty (VD: CNTT, Xây dựng, Y tế, Kế toán...)")
+    size: Optional[str] = Field(default=None, example="50-100 nhân sự")
     website: Optional[str] = None
-    address: Optional[str] = None
-    license_file_url: Optional[str] = Field(
-        default=None,
-        description="URL (Cloudinary) của giấy phép kinh doanh để Admin đối chiếu"
-    )
+    
+    location: Optional[LocationDetail] = None 
+    
+    logo_url: Optional[str] = None
+    banner_url: Optional[str] = None
+    description: Optional[str] = Field(default=None, description="Giới thiệu công ty (trang public)")
+    
+    legal_representative_name: Optional[str] = None
+    kyc_documents: List[KYCDocument] = Field(default_factory=list, description="Danh sách giấy tờ pháp lý")
 
     @field_validator("tax_code")
     def validate_tax_code_format(cls, v):
@@ -34,10 +27,7 @@ class CompanyCreate(BaseModel):
 
 class CompanyVerifyAction(BaseModel):
     approve: bool
-    rejection_reason: Optional[str] = Field(
-        default=None,
-        description="Bắt buộc nếu approve=False"
-    )
+    rejection_reason: Optional[str] = Field(default=None, description="Bắt buộc nếu approve=False")
 
     @field_validator("rejection_reason")
     def require_reason_if_rejected(cls, v, info):
@@ -47,7 +37,6 @@ class CompanyVerifyAction(BaseModel):
 
 class DepartmentCreate(BaseModel):
     company_id: str
-    name: str = Field(
-        ...,
-        example="Phòng Backend"
-    )
+    name: str = Field(..., example="Phòng Backend")
+    description: Optional[str] = None
+    head_user_id: Optional[str] = Field(default=None, description="Trưởng phòng")

@@ -1,43 +1,38 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 from datetime import datetime
 from app.schemas.common_schema import utc_now, ApplicationStatus, ApplicationSource
 from app.schemas.cv_schema import CVSnapshot
-from app.schemas.application_schema import AIScore
+from app.schemas.application_schema import AIScore, StatusChangeEntry, InterviewSchedule, OfferDetail, InterviewQuestion
 
 class NoteEntry(BaseModel):
     author_id: str
-    author_name: str = Field(
-        ...,
-        description="Denormalize để FE không cần join thêm"
-    )
+    author_name: str
     content: str
     created_at: datetime = Field(default_factory=utc_now)
 
 class ApplicationDB(BaseModel):
     id: str
     job_id: str
-    cv_snapshot: CVSnapshot = Field(
-        ...,
-        description="Bản đóng băng CV tại thời điểm nộp — không đổi dù CVDocument gốc bị sửa/xóa sau"
-    )
+    cv_snapshot: CVSnapshot = Field(...)
     applicant_user_id: Optional[str] = None
     source: ApplicationSource
     company_id: str
-    cover_letter: Optional[str] = Field(
-        default=None,
-        description="Thư giới thiệu ứng viên đính kèm"
-    )
+    cover_letter: Optional[str] = None
     ai_score: Optional[AIScore] = None
     status: ApplicationStatus = Field(default=ApplicationStatus.NEW)
-    is_viewed: bool = Field(
-        default=False,
-        description="HR đã xem hồ sơ hay chưa"
-    )
+    
+    status_history: List[StatusChangeEntry] = Field(default_factory=list)
+    viewed_at: Optional[datetime] = None
+    viewed_by_user_id: Optional[str] = None
+    
     notes: List[NoteEntry] = Field(default_factory=list)
+    
+    interview_schedules: List[InterviewSchedule] = Field(default_factory=list)
+    offer_detail: Optional[OfferDetail] = None
+    rejection_reason: Optional[str] = Field(default=None, description="Bắt buộc nếu bị Reject")
+    
+    ai_interview_questions: Optional[List[InterviewQuestion]] = None
+    
     applied_at: datetime = Field(default_factory=utc_now)
     updated_at: Optional[datetime] = None
-    ai_interview_questions: Optional[List[Dict[str, Any]]] = Field(
-        default=None,
-        description="Lưu trữ câu hỏi phỏng vấn do AI sinh ra để tái sử dụng"
-    )

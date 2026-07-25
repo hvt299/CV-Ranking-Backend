@@ -70,23 +70,26 @@ class InterviewSchedule(BaseModel):
         description="Lời nhắn thêm từ HR"
     )
 
+class StatusChangeEntry(BaseModel):
+    from_status: ApplicationStatus
+    to_status: ApplicationStatus
+    changed_by_user_id: str
+    changed_at: datetime = Field(default_factory=utc_now)
+
+class OfferDetail(BaseModel):
+    offered_salary: int
+    currency: str = Field(default="VND")
+    start_date: datetime
+    offer_file_url: Optional[str] = None
+
+class InterviewQuestion(BaseModel):
+    category: str = Field(..., description="VD: Technical, Soft Skill")
+    question: str
+    suggested_answer_points: List[str] = Field(default=[])
+
 class ApplicationUpdate(BaseModel):
     status: Optional[ApplicationStatus] = None
-    note_to_add: Optional[str] = Field(
-        None,
-        description="Thêm một dòng ghi chú mới vào mảng notes (author lấy từ token, không nhận từ client)"
-    )
-    send_email: bool = Field(
-        default=False,
-        description="Cờ xác nhận có gửi email cho ứng viên không"
-    )
-    interview_schedule: Optional[InterviewSchedule] = Field(
-        default=None,
-        description="Thông tin lịch phỏng vấn để gửi mail"
-    )
-
-class NoteEntry(BaseModel):
-    author_id: str
-    author_name: str = Field(..., description="Denormalize để FE không cần join thêm")
-    content: str
-    created_at: datetime = Field(default_factory=utc_now)
+    note_to_add: Optional[str] = None
+    send_email: bool = Field(default=False)
+    interview_schedule: Optional[InterviewSchedule] = None
+    rejection_reason: Optional[str] = None

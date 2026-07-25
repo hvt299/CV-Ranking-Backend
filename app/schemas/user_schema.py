@@ -3,23 +3,20 @@ from typing import Optional
 import re
 from app.schemas.common_schema import UserRole
 
-class ProfileDetails(BaseModel):
-    phone: Optional[str] = None
-    address: Optional[str] = None
-    github: Optional[str] = None
-    linkedin: Optional[str] = None
-    bio: Optional[str] = None
-
 class UserCreate(BaseModel):
     email: EmailStr
     full_name: str = Field(..., min_length=6, example="Trần Nam")
     password: str
     role: UserRole = Field(default=UserRole.APPLICANT)
+    
     company_id: Optional[str] = None
-    department_id: Optional[str] = Field(
-        default=None,
-        description="Chỉ có ý nghĩa khi role = hr_member"
-    )
+    department_id: Optional[str] = Field(default=None, description="Chỉ có ý nghĩa khi role = hr_member")
+    
+    phone: Optional[str] = None
+    bio: Optional[str] = None
+    
+    job_title_internal: Optional[str] = Field(default=None, description="Chức danh nội bộ (VD: Trưởng phòng Tuyển dụng)")
+    extension_phone: Optional[str] = Field(default=None, description="Số máy lẻ nội bộ")
 
     @field_validator("password")
     def validate_password(cls, v):
@@ -38,8 +35,13 @@ class UserCreate(BaseModel):
         return v
 
     @field_validator("company_id")
-    def validate_company_required_for_hr_member(cls, v, info):
+    def validate_company_id_by_role(cls, v, info):
         role = info.data.get("role")
+        
+        if role in [UserRole.APPLICANT, UserRole.ADMIN] and v is not None:
+            raise ValueError("company_id phải để trống (None) đối với Applicant và Admin.")
+            
         if role == UserRole.HR_MEMBER and not v:
             raise ValueError("company_id là bắt buộc với role hr_member (được mời vào công ty có sẵn).")
+            
         return v

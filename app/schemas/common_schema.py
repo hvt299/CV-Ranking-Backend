@@ -57,3 +57,22 @@ class AuditAction(str, Enum):
     HR_MEMBER_INVITED = "hr_member_invited"
     HR_MEMBER_REMOVED = "hr_member_removed"
     USER_SUSPENDED = "user_suspended"
+
+class SubscriptionTier(str, Enum):
+    FREE = "free"
+    PRO = "pro"
+    ENTERPRISE = "enterprise"
+
+class AdminLevel(str, Enum):
+    PROVINCE = "province"
+    DISTRICT = "district"
+    WARD = "ward"
+
+class RecommendationEnum(str, Enum):
+    HIRE = "hire"
+    NO_HIRE = "no_hire"
+    MAYBE = "maybe"
+
+class AlertFrequency(str, Enum):
+    DAILY = "daily"
+    WEEKLY = "weekly"

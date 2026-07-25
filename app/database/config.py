@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
+MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017/cv-ranking")
 
 class Database:
     client: AsyncIOMotorClient = None
@@ -19,9 +19,17 @@ class Collections:
     CVS = "cvs"
     APPLICATIONS = "applications"
     NOTIFICATIONS = "notifications"
-    CV_VECTORS = "cv_vectors"
-    JD_VECTORS = "jd_vectors"
     AUDIT_LOGS = "audit_logs"
+    DEPARTMENTS = "departments"
+    SKILLS = "skills"
+    ADMINISTRATIVE_UNITS = "administrative_units"
+    REFRESH_TOKENS = "refresh_tokens"
+    SUBSCRIPTION_PLANS = "subscription_plans"
+    APPLICANT_PROFILES = "applicant_profiles"
+    INTERVIEW_FEEDBACKS = "interview_feedbacks"
+    COMPANY_REVIEWS = "company_reviews"
+    SAVED_JOBS = "saved_jobs"
+    JOB_ALERTS = "job_alerts"
 
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "cv-ranking")
 

@@ -25,6 +25,7 @@ class CurrentUser(BaseModel):
     email: EmailStr
     role: UserRole
     company_id: Optional[str] = None
+    department_id: Optional[str] = None
 
 def verify_password(plain_password: str, hashed_password: str):
     pre_hashed_password = hashlib.sha256(plain_password.encode()).hexdigest()
@@ -66,18 +67,22 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> CurrentUser:
 
     user = await UserRepository.get_by_id(user_id)
     
-    if not user:
+    if not user or user.get("deleted_at") is not None:
         raise credentials_exception
-
-    try:
-        return CurrentUser(
-            id=str(user["_id"]),
-            email=user["email"],
-            role=UserRole(user.get("role", UserRole.APPLICANT.value)),
-            company_id=user.get("company_id")
+        
+    if not user.get("is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tài khoản của bạn đã bị khóa."
         )
-    except ValueError:
-        raise credentials_exception
+
+    return CurrentUser(
+        id=str(user["_id"]),
+        email=user["email"],
+        role=UserRole(user.get("role", UserRole.APPLICANT.value)),
+        company_id=user.get("company_id"),
+        department_id=user.get("department_id")
+    )
 
 async def require_admin(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
     if current_user.role != UserRole.ADMIN:
