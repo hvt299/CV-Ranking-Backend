@@ -1,15 +1,17 @@
 import os
 import json
 import logging
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+client = None
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
 async def extract_cv_metrics_with_llm(raw_text: str) -> dict:
     fallback_data = {
@@ -19,7 +21,7 @@ async def extract_cv_metrics_with_llm(raw_text: str) -> dict:
         "gap_months": 0
     }
 
-    if not GEMINI_API_KEY:
+    if not client:
         logger.warning("Chưa cấu hình GEMINI_API_KEY. Bỏ qua LLM Extraction.")
         return fallback_data
 
@@ -41,20 +43,25 @@ async def extract_cv_metrics_with_llm(raw_text: str) -> dict:
     {safe_text}
     """
 
+    generation_config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        temperature=0.1,
+    )
+
     try:
-        generation_config = genai.GenerationConfig(
-            response_mime_type="application/json",
-            temperature=0.1
+        response = await client.aio.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config=generation_config
         )
-        
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        response = await model.generate_content_async(prompt, generation_config=generation_config)
-        
     except Exception as e:
         logger.warning(f"Gemini 2.5 Flash thất bại ({e}). Thử lại với 2.0 Flash...")
         try:
-            model = genai.GenerativeModel('gemini-2.0-flash')
-            response = await model.generate_content_async(prompt, generation_config=generation_config)
+            response = await client.aio.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=prompt,
+                config=generation_config
+            )
         except Exception as e2:
             logger.error(f"Cả 2 model Gemini đều thất bại: {e2}")
             return fallback_data
@@ -82,8 +89,9 @@ async def extract_cv_metrics_with_llm(raw_text: str) -> dict:
         logger.error(f"Lỗi parse JSON từ LLM: {parse_error}")
         return fallback_data
 
+
 async def generate_interview_questions(cv_text: str, jd_text: str) -> list:
-    if not GEMINI_API_KEY:
+    if not client:
         logger.warning("Chưa cấu hình GEMINI_API_KEY. Không thể sinh câu hỏi.")
         return []
 
@@ -112,20 +120,25 @@ async def generate_interview_questions(cv_text: str, jd_text: str) -> list:
     ]
     """
 
+    generation_config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        temperature=0.4,
+    )
+
     try:
-        generation_config = genai.GenerationConfig(
-            response_mime_type="application/json",
-            temperature=0.4
+        response = await client.aio.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config=generation_config
         )
-        
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        response = await model.generate_content_async(prompt, generation_config=generation_config)
-        
     except Exception as e:
         logger.warning(f"Gemini 2.5 Flash thất bại khi sinh câu hỏi ({e}). Thử lại với 2.0 Flash...")
         try:
-            model = genai.GenerativeModel('gemini-2.0-flash')
-            response = await model.generate_content_async(prompt, generation_config=generation_config)
+            response = await client.aio.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=prompt,
+                config=generation_config
+            )
         except Exception as e2:
             logger.error(f"Cả 2 model Gemini đều thất bại: {e2}")
             return []

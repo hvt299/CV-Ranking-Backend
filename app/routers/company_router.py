@@ -65,10 +65,10 @@ async def update_company_settings(
 ):
     if current_user.role != UserRole.HR_OWNER.value:
         raise HTTPException(status_code=403, detail="Chỉ HR Owner mới được phép cập nhật thông tin công ty")
-        
+
     update_data = {"updated_at": datetime.now(timezone.utc)}
-    
-    allowed_fields = ["tax_code", "industry", "size", "website", "address", "license_file_url", "name"]
+
+    allowed_fields = ["tax_code", "industry", "size", "website", "address", "license_file_url", "name", "logo_url", "banner_url"]
     for field in allowed_fields:
         if field in payload:
             update_data[field] = payload[field]

@@ -17,6 +17,7 @@ from app.services.vector_engine import compress_cv_data, get_cv_embeddings, get_
 from app.services.document_forensics import detect_hidden_text
 from app.core.security import require_hr, require_hr_or_admin, get_scope_filter, CurrentUser
 from app.middleware.rate_limit import limiter
+from app.middleware.subscription import verify_cv_quota
 from app.services.storage_service import upload_file_to_cloudinary, delete_file_from_cloudinary
 from app.services.email_service import send_interview_email
 from app.services.llm_service import generate_interview_questions
@@ -46,7 +47,7 @@ async def upload_cv_to_pool(
     request: Request,
     response: Response,
     file: UploadFile = File(..., description="File CV định dạng PDF hoặc DOCX"),
-    current_user: CurrentUser = Depends(require_hr)
+    current_user: CurrentUser = Depends(verify_cv_quota)
 ):
     content = await file.read()
     
@@ -203,11 +204,12 @@ async def map_cv_to_job(
         "ai_score": scoring_result
     }
 
-@router.patch("/applications/{app_id}", dependencies=[Depends(require_hr_or_admin)])
+@router.patch("/applications/{app_id}")
 async def update_application_status(
     app_id: str, 
     background_tasks: BackgroundTasks,
     update_data: ApplicationUpdate = Body(...),
+    current_user: CurrentUser = Depends(require_hr_or_admin),
     scope_filter: dict = Depends(get_scope_filter)
 ):
     try:
@@ -215,16 +217,33 @@ async def update_application_status(
         current_app = await ApplicationRepository.find_one(filter_query)
         if not current_app:
             raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển này")
-            
-        update_query = {"$set": {}}
-        
-        if update_data.status is not None:
+
+        update_query = {"$set": {}, "$push": {}}
+
+        if update_data.status is not None and update_data.status.value != current_app.get("status"):
             update_query["$set"]["status"] = update_data.status.value
-            
+
+            # 1. Ghi nhận lịch sử kéo/thả Kanban
+            update_query["$push"]["status_history"] = {
+                "from_status": current_app.get("status"),
+                "to_status": update_data.status.value,
+                "changed_by_user_id": current_user.id,
+                "changed_at": datetime.now(timezone.utc)
+            }
+
+            # 2. Lưu lịch phỏng vấn vào DB nếu HR gửi mail
+            if update_data.status.value == ApplicationStatus.INTERVIEW.value and update_data.interview_schedule:
+                schedule_dict = update_data.interview_schedule.model_dump()
+                schedule_dict["created_at"] = datetime.now(timezone.utc)
+                update_query["$push"]["interview_schedules"] = schedule_dict
+
         if getattr(update_data, "note_to_add", None): 
-            update_query["$push"] = {"notes": update_data.note_to_add}
-            
-        if not update_query.get("$set") and not update_query.get("$push"):
+            update_query["$push"]["notes"] = update_data.note_to_add
+
+        if not update_query["$set"]: del update_query["$set"]
+        if not update_query["$push"]: del update_query["$push"]
+
+        if not update_query:
             return {"message": "Không có dữ liệu mới nào để cập nhật"}
 
         update_query["$set"]["updated_at"] = datetime.now(timezone.utc)
@@ -378,9 +397,13 @@ async def toggle_application_viewed(
     payload: ViewToggleRequest = Body(...),
     scope_filter: dict = Depends(get_scope_filter)
 ):
+    set_data = {"is_viewed": payload.is_viewed, "updated_at": datetime.now(timezone.utc)}
+    if payload.is_viewed:
+        set_data["viewed_at"] = datetime.now(timezone.utc)
+
     modified = await ApplicationRepository.update_by_query(
         {"_id": ObjectId(app_id), **scope_filter},
-        {"$set": {"is_viewed": payload.is_viewed, "updated_at": datetime.now(timezone.utc)}}
+        {"$set": set_data}
     )
     if modified == 0:
         raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển")

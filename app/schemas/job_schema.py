@@ -3,6 +3,7 @@ from typing import List, Optional
 from datetime import datetime
 from enum import Enum
 from app.schemas.shared_schema import LocationDetail
+from app.schemas.common_schema import JobStatus
 
 class JobLevel(str, Enum):
     INTERN = "Intern"
@@ -86,3 +87,12 @@ class JobCreateEnterprise(BaseModel):
     other_info: Optional[str] = Field(default="")
     
     jd_file_url: Optional[str] = None
+
+class JobResponse(JobCreateEnterprise):
+    id: str
+    company_name: Optional[str] = Field(default="Công ty Ẩn danh")
+    status: JobStatus
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    view_count: Optional[int] = Field(default=0)
+    num_applications: Optional[int] = Field(default=0)

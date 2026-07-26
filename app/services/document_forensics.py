@@ -6,6 +6,8 @@ import docx
 import fitz
 from docx.shared import RGBColor
 
+from app.services.nlp_engine import INDUSTRY_SKILL_MAP
+
 logger = logging.getLogger(__name__)
 
 # ==========================================================
@@ -21,38 +23,6 @@ IGNORE_TEXTS = {
 
 MIN_TINY_FONT = 2.0
 SMALL_FONT = 4.0
-
-INDUSTRY_KEYWORDS = {
-    "it": {
-        "python", "java", "c++", "c#", ".net", "docker", "kubernetes", "aws", "azure",
-        "gcp", "tensorflow", "pytorch", "sql", "nosql", "mongodb", "redis", "linux",
-        "react", "angular", "vue", "nodejs", "fastapi", "django", "flask", "spring",
-        "nlp", "llm", "rag", "embedding", "machine learning", "deep learning"
-    },
-    "marketing": {
-        "seo", "content", "facebook ads", "tiktok", "livestream", "kol", "koc", 
-        "conversion", "roi", "branding", "digital marketing", "campaign", "pr", "b2b"
-    },
-    "accounting": {
-        "misa", "fast", "hạch toán", "báo cáo tài chính", "quyết toán thuế", 
-        "khấu hao", "kiểm toán", "công nợ", "nghiệp vụ", "thuế"
-    },
-    "design": {
-        "photoshop", "illustrator", "figma", "ui/ux", "3d", "after effects", 
-        "premiere", "indesign", "graphic", "layout", "render"
-    },
-    "construction": {
-        "autocad", "revit", "bim", "dự toán", "kết cấu", "an toàn lao động", 
-        "hse", "thi công", "nghiệm thu", "giám sát", "bản vẽ"
-    },
-    "sales": {
-        "doanh số", "kpi", "chốt sale", "telesales", "khách hàng", "đàm phán", 
-        "thị trường", "pipeline", "b2c", "b2b", "doanh thu"
-    }
-}
-
-ALL_KEYWORDS = set().union(*INDUSTRY_KEYWORDS.values())
-
 
 def _normalize_text(text: str) -> str:
     return " ".join(text.lower().strip().split())
@@ -75,15 +45,20 @@ def _is_watermark(text: str) -> bool:
 
 def _looks_like_keyword_stuffing(text: str, industry: str = "all") -> bool:
     words = text.lower().replace(",", " ").split()
-
     if len(words) < 5:
         return False
 
-    keywords_to_check = INDUSTRY_KEYWORDS.get(industry, ALL_KEYWORDS)
+    # Lấy danh sách key chuẩn từ DB Cache thay vì hardcode
+    target_skill_map = INDUSTRY_SKILL_MAP.get(industry, INDUSTRY_SKILL_MAP.get("all", {}))
+    
+    # Gom tất cả variants thành 1 set phẳng để tra cứu siêu tốc O(1)
+    keywords_to_check = set(variant for variants in target_skill_map.values() for variant in variants)
 
+    # Đếm số lượng từ khóa va chạm
     matched = sum(1 for w in words if w in keywords_to_check)
 
-    return matched >= 4
+    # Nếu trên 50% số từ trong cụm (hoặc >= 5 từ) là danh từ kỹ năng -> Nhồi nhét từ khóa
+    return matched >= 5 or (len(words) > 0 and matched / len(words) > 0.5)
 
 
 def _risk_to_penalty(risk_score: int) -> int:

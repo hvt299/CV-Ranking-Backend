@@ -1,59 +1,37 @@
 from typing import Optional, List, Dict, Any
 from bson import ObjectId
 from app.database.config import get_db, Collections
+from app.repositories.base_repository import BaseRepository
 
-class NotificationRepository:
-    @staticmethod
-    async def find_one(query: dict) -> Optional[Dict[str, Any]]:
-        db = get_db()
-        return await db[Collections.NOTIFICATIONS].find_one(query)
-    
-    @staticmethod
-    async def create(notif_data: dict) -> str:
-        db = get_db()
-        result = await db[Collections.NOTIFICATIONS].insert_one(notif_data)
-        return str(result.inserted_id)
+class NotificationRepository(BaseRepository):
+    collection_name = Collections.NOTIFICATIONS
 
-    @staticmethod
-    async def update(notif_id: str, recipient_user_id: str, update_data: dict) -> int:
-        db = get_db()
-        result = await db[Collections.NOTIFICATIONS].update_one(
-            {"_id": ObjectId(notif_id), "recipient_user_id": recipient_user_id},
-            {"$set": update_data}
-        )
-        return result.modified_count
+    @classmethod
+    async def update(cls, notif_id: str, recipient_user_id: str, update_data: dict) -> int:
+        query = {
+            "_id": ObjectId(notif_id), 
+            "recipient_user_id": recipient_user_id
+        }
+        return await cls.update_custom(query, {"$set": update_data})
 
-    @staticmethod
-    async def update_custom(query: dict, update_data: dict) -> int:
-        db = get_db()
-        result = await db[Collections.NOTIFICATIONS].update_one(query, update_data)
-        return result.modified_count
-
-    @staticmethod
-    async def update_many(query: dict, update_data: dict) -> int:
-        db = get_db()
-        result = await db[Collections.NOTIFICATIONS].update_many(query, {"$set": update_data})
-        return result.modified_count
-
-    @staticmethod
-    async def delete(notif_id: str, recipient_user_id: str) -> int:
-        db = get_db()
-        result = await db[Collections.NOTIFICATIONS].delete_one({
+    @classmethod
+    async def delete(cls, notif_id: str, recipient_user_id: str) -> int:
+        query = {
             "_id": ObjectId(notif_id),
             "recipient_user_id": recipient_user_id
-        })
-        return result.deleted_count
+        }
+        return await cls.delete_many(query)
 
-    @staticmethod
-    async def delete_custom(query: dict) -> int:
-        db = get_db()
-        result = await db[Collections.NOTIFICATIONS].delete_one(query)
-        return result.deleted_count
+    @classmethod
+    async def delete_custom(cls, query: dict) -> int:
+        return await cls.delete_many(query)
 
-    @staticmethod
-    async def find_all(query: dict = {}, limit: int = 100) -> List[Dict[str, Any]]:
+    @classmethod
+    async def find_all(cls, query: dict = {}, limit: int = 100, include_deleted: bool = False) -> List[Dict[str, Any]]:
         db = get_db()
-        cursor = db[Collections.NOTIFICATIONS].find(query).sort("created_at", -1)
+        query = cls._apply_soft_delete(query, include_deleted)
+        # Notification luôn ưu tiên tin mới
+        cursor = db[cls.collection_name].find(query).sort("created_at", -1)
         if limit:
             cursor = cursor.limit(limit)
         return await cursor.to_list(length=limit)

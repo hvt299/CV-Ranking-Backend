@@ -7,13 +7,16 @@ import secrets
 import hashlib
 from fastapi.responses import JSONResponse
 import jwt
-from app.database.config import Collections
 
-from app.schemas.common_schema import CompanyStatus, UserRole
+from app.schemas.common_schema import UserRole, CompanyStatus, JobStatus, utc_now
 from app.schemas.user_schema import UserCreate
 from app.schemas.auth_schema import UserLogin, Token
 from app.schemas.company_schema import CompanyCreate
 from app.repositories.user_repository import UserRepository
+from app.repositories.company_repository import CompanyRepository
+from app.repositories.job_repository import JobRepository
+from app.repositories.refresh_token_repository import RefreshTokenRepository
+from app.repositories.applicant_profile_repository import ApplicantProfileRepository
 
 from app.core.security import (
     CurrentUser,
@@ -33,6 +36,7 @@ from pydantic import BaseModel, Field, field_validator
 import httpx
 from fastapi.security import OAuth2PasswordRequestForm
 import re
+import time
 
 # ---------------------------------------------------------------------
 # DTO đặc thù cho router này (không phải entity lưu DB nên KHÔNG đặt
@@ -114,7 +118,7 @@ def _make_avatar_url(full_name: str) -> str:
     encoded_name = urllib.parse.quote(full_name)
     return f"https://ui-avatars.com/api/?name={encoded_name}&background=random&color=fff&size=200"
 
-async def _create_company(db, req_data: BaseModel) -> str:
+async def _create_company(req_data: BaseModel) -> str:
     company_doc = CompanyCreate(
         name=req_data.company_name, 
         tax_code=req_data.tax_code,
@@ -126,8 +130,8 @@ async def _create_company(db, req_data: BaseModel) -> str:
     
     company_doc["status"] = CompanyStatus.PENDING_VERIFICATION.value
     company_doc["created_at"] = datetime.now(timezone.utc)
-    result = await db[Collections.COMPANIES].insert_one(company_doc)
-    return str(result.inserted_id)
+    
+    return await CompanyRepository.create(company_doc)
 
 # =====================================================================
 # ĐĂNG KÝ / XÁC THỰC EMAIL
@@ -160,7 +164,16 @@ async def register_user(request: Request, response: Response, background_tasks: 
                 "is_verified": True,
                 "created_at": datetime.now(timezone.utc),
             }
-            await UserRepository.create(new_user)
+            user_id = await UserRepository.create(new_user)
+            
+            # TRIGGER GIAI ĐOẠN 2.3: Tạo Profile Ứng viên rỗng
+            if token_data.get("role") == UserRole.APPLICANT.value:
+                await ApplicantProfileRepository.create({
+                    "user_id": str(user_id),
+                    "created_at": datetime.now(timezone.utc),
+                    "deleted_at": None
+                })
+                
             return {"status": "success", "message": "Gia nhập công ty thành công! Bạn có thể đăng nhập ngay."}
         except jwt.PyJWTError:
             raise HTTPException(status_code=400, detail="Link mời không hợp lệ hoặc đã hết hạn.")
@@ -201,6 +214,14 @@ async def register_user(request: Request, response: Response, background_tasks: 
     }
 
     user_id = await UserRepository.create(new_user)
+    
+    # TRIGGER GIAI ĐOẠN 2.3: Tạo Profile Ứng viên rỗng
+    if payload.role == UserRole.APPLICANT:
+        await ApplicantProfileRepository.create({
+            "user_id": str(user_id),
+            "created_at": datetime.now(timezone.utc),
+            "deleted_at": None
+        })
 
     verify_token = jwt.encode(
         {"sub": str(user_id), "exp": datetime.now(timezone.utc) + timedelta(days=1)},
@@ -210,7 +231,6 @@ async def register_user(request: Request, response: Response, background_tasks: 
     send_verification_email(background_tasks, payload.email, payload.full_name, verify_token)
 
     return {"status": "success", "message": "Đăng ký thành công! Vui lòng kiểm tra email để kích hoạt tài khoản."}
-
 
 @router.get("/verify")
 async def verify_email(token: str):
@@ -341,11 +361,16 @@ async def google_login(request: Request, response: Response, social_request: Soc
                 "is_verified": True,
                 "created_at": datetime.now(timezone.utc)
             }
-            user_id = await UserRepository.create({
-                "email": email, "full_name": full_name, "hashed_password": get_password_hash(secrets.token_urlsafe(32)),
-                "avatar": final_avatar, "original_avatar": final_avatar, "role": social_request.role.value,
-                "company_id": company_id, "is_verified": True, "created_at": datetime.now(timezone.utc)
-            })
+            user_id = await UserRepository.create(new_user)
+            
+            # TRIGGER GIAI ĐOẠN 2.3: Tạo Profile Ứng viên rỗng
+            if social_request.role == UserRole.APPLICANT:
+                await ApplicantProfileRepository.create({
+                    "user_id": str(user_id),
+                    "created_at": datetime.now(timezone.utc),
+                    "deleted_at": None
+                })
+                
             user = await UserRepository.get_by_id(user_id)
 
         else:
@@ -400,7 +425,6 @@ async def _exchange_linkedin_code(code: str, redirect_uri: str) -> str:
         raise ValueError("Phản hồi từ LinkedIn không chứa access_token")
 
     return access_token
-
 
 @router.post("/linkedin")
 @limiter.limit("10/minute")
@@ -472,11 +496,16 @@ async def linkedin_login(request: Request, response: Response, social_request: S
                 "is_verified": True,
                 "created_at": datetime.now(timezone.utc)
             }
-            user_id = await UserRepository.create({
-                "email": email, "full_name": full_name, "hashed_password": get_password_hash(secrets.token_urlsafe(32)),
-                "avatar": final_avatar, "original_avatar": final_avatar, "role": social_request.role.value,
-                "company_id": company_id, "is_verified": True, "created_at": datetime.now(timezone.utc)
-            })
+            user_id = await UserRepository.create(new_user)
+            
+            # TRIGGER GIAI ĐOẠN 2.3: Tạo Profile Ứng viên rỗng
+            if social_request.role == UserRole.APPLICANT:
+                await ApplicantProfileRepository.create({
+                    "user_id": str(user_id),
+                    "created_at": datetime.now(timezone.utc),
+                    "deleted_at": None
+                })
+                
             user = await UserRepository.get_by_id(user_id)
 
         else:
@@ -511,7 +540,14 @@ async def get_profile(current_user: CurrentUser = Depends(get_current_user)):
     if not user:
         raise HTTPException(status_code=404, detail="Không tìm thấy thông tin người dùng")
 
-    profile = user.get("profile", {}) or {}
+    # Đọc thông tin từ bảng Applicant Profiles thay vì UserDB
+    profile = {}
+    if user.get("role") == UserRole.APPLICANT.value:
+        profile = await ApplicantProfileRepository.get_by_user_id(current_user.id) or {}
+    else:
+        # Fallback an toàn cho role HR nếu có data cũ
+        profile = user.get("profile", {}) or {}
+
     return {
         "id": current_user.id,
         "email": user["email"],
@@ -526,32 +562,43 @@ async def get_profile(current_user: CurrentUser = Depends(get_current_user)):
         "company_id": user.get("company_id"),
     }
 
-
 @router.patch("/profile")
 async def update_profile(profile_data: ProfileUpdate, current_user: CurrentUser = Depends(get_current_user)):
-    update_data = {}
-    if profile_data.full_name is not None:
-        update_data["full_name"] = profile_data.full_name
-    if profile_data.avatar is not None:
-        update_data["avatar"] = profile_data.avatar
+    user = await UserRepository.get_by_id(current_user.id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
 
+    # 1. Cập nhật bảng User (Thông tin cơ bản)
+    user_update = {}
+    if profile_data.full_name is not None:
+        user_update["full_name"] = profile_data.full_name
+    if profile_data.avatar is not None:
+        user_update["avatar"] = profile_data.avatar
+
+    if user_update:
+        user_update["updated_at"] = datetime.now(timezone.utc)
+        await UserRepository.update(current_user.id, user_update)
+
+    # 2. Cập nhật bảng Applicant Profile (Thông tin mở rộng)
+    profile_update = {}
     for field in ("phone", "address", "github", "linkedin", "bio"):
         value = getattr(profile_data, field)
         if value is not None:
-            update_data[f"profile.{field}"] = value
+            profile_update[field] = value
 
-    if not update_data:
-        return {"status": "success", "message": "Không có thay đổi nào để cập nhật"}
-
-    update_data["updated_at"] = datetime.now(timezone.utc)
-
-    modified_count = await UserRepository.update(current_user.id, update_data)
-
-    if modified_count == 0:
-        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+    if profile_update and user.get("role") == UserRole.APPLICANT.value:
+        profile_update["updated_at"] = datetime.now(timezone.utc)
+        existing_profile = await ApplicantProfileRepository.get_by_user_id(current_user.id)
+        
+        if existing_profile:
+            await ApplicantProfileRepository.update(str(existing_profile["_id"]), profile_update)
+        else:
+            profile_update["user_id"] = current_user.id
+            profile_update["created_at"] = datetime.now(timezone.utc)
+            profile_update["deleted_at"] = None
+            await ApplicantProfileRepository.create(profile_update)
 
     return {"status": "success", "message": "Cập nhật thông tin thành công"}
-
 
 @router.patch("/change-password")
 async def change_password(password_data: PasswordChange, current_user: CurrentUser = Depends(get_current_user)):
@@ -571,7 +618,6 @@ async def change_password(password_data: PasswordChange, current_user: CurrentUs
 
     return {"status": "success", "message": "Đổi mật khẩu thành công"}
 
-
 @router.get("/me")
 async def get_current_user_profile(current_user: CurrentUser = Depends(get_current_user)):
     user = await UserRepository.get_by_id(current_user.id)
@@ -588,7 +634,6 @@ async def get_current_user_profile(current_user: CurrentUser = Depends(get_curre
         "company_id": user.get("company_id"),
     }
 
-
 @router.post("/docs-login", response_model=Token, include_in_schema=False)
 async def swagger_login(form_data: OAuth2PasswordRequestForm = Depends()):
     user = await UserRepository.get_by_email(form_data.username)
@@ -601,3 +646,86 @@ async def swagger_login(form_data: OAuth2PasswordRequestForm = Depends()):
 
     access_token = create_access_token(build_token_payload(user))
     return {"access_token": access_token, "token_type": "bearer"}
+
+@router.delete("/me/anonymize", status_code=200, tags=["Profile"])
+async def anonymize_account(current_user: CurrentUser = Depends(get_current_user)):
+    user = await UserRepository.get_by_id(current_user.id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+
+    # ==========================================
+    # EDGE CASE: XỬ LÝ NHƯỢNG QUYỀN HR_OWNER
+    # ==========================================
+    if user.get("role") == UserRole.HR_OWNER.value and user.get("company_id"):
+        company = await CompanyRepository.get_by_id(user["company_id"])
+        
+        if company and company.get("owner_user_id") == current_user.id:
+            hr_count = await UserRepository.count_documents({
+                "company_id": user["company_id"],
+                "role": {"$in": [UserRole.HR_OWNER.value, UserRole.HR_MEMBER.value]}
+            })
+            
+            if hr_count > 1:
+                # Có người khác -> Bắt buộc nhượng quyền
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Công ty đang có thành viên khác. Bạn phải chuyển quyền Owner trước khi xóa tài khoản."
+                )
+            else:
+                # HR_OWNER cô độc -> Xóa mềm công ty, đóng mọi Job
+                await CompanyRepository.update(
+                    user["company_id"], 
+                    {
+                        "status": CompanyStatus.SUSPENDED.value, 
+                        "deleted_at": utc_now()
+                    }
+                )
+                await JobRepository.update_many(
+                    {"company_id": user["company_id"], "status": JobStatus.OPEN.value},
+                    {"status": JobStatus.CLOSED.value}
+                )
+
+    # ==========================================
+    # KỸ THUẬT ANONYMIZATION
+    # ==========================================
+    timestamp = int(time.time())
+    anonymized_email = f"deleted_{timestamp}_{current_user.id}@anonymized.local"
+    
+    # Reset password để cắt đứt mọi nỗ lực Brute-force
+    random_pw = get_password_hash(secrets.token_urlsafe(32)) 
+    
+    update_data = {
+        "email": anonymized_email,
+        "hashed_password": random_pw,
+        "full_name": "Người dùng đã xóa",
+        "avatar": "",
+        "original_avatar": "",
+        "is_active": False,
+        "deleted_at": utc_now(),
+    }
+    
+    # Quét sạch thông tin định danh cá nhân (PII)
+    unset_data = {
+        "phone": "",
+        "bio": "",
+        "github": "",
+        "linkedin": "",
+        "job_title_internal": "",
+        "extension_phone": ""
+    }
+
+    await UserRepository.update_custom(
+        {"_id": ObjectId(current_user.id)},
+        {"$set": update_data, "$unset": unset_data}
+    )
+    
+    # Xóa mềm Profile Applicant nếu có
+    if user.get("role") == UserRole.APPLICANT.value:
+        await ApplicantProfileRepository.update_custom(
+            {"user_id": current_user.id},
+            {"$set": {"deleted_at": utc_now()}, "$unset": {"phone": "", "address": "", "bio": "", "github": "", "linkedin": ""}}
+        )
+    
+    await RefreshTokenRepository.delete_many({"user_id": current_user.id})
+
+    return {"status": "success", "message": "Tài khoản của bạn đã được xóa và ẩn danh vĩnh viễn."}

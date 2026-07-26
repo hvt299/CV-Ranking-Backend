@@ -13,10 +13,12 @@ from app.middleware.rate_limit import limiter
 from app.database.config import connect_to_mongo, close_mongo_connection
 from app.routers import auth_router, cv_router, job_router, admin_router, applicant_router, company_router
 from app.routers.upload_router import router as upload_router
+from app.services.nlp_engine import initialize_skill_map
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_to_mongo()
+    await initialize_skill_map()
     yield
     await close_mongo_connection()
 

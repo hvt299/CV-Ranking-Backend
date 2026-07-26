@@ -3,6 +3,7 @@ from typing import List
 from datetime import datetime, timezone
 
 from app.core.security import CurrentUser, require_hr, require_hr_or_admin, get_scope_filter
+from app.middleware.subscription import verify_job_quota
 from app.database.config import Collections
 from app.schemas.job_schema import JobCreateEnterprise, JobResponse
 from app.schemas.common_schema import JobStatus, UserRole, ApplicationStatus, CompanyStatus
@@ -13,6 +14,8 @@ from app.repositories.cv_repository import CVRepository
 
 from app.services.nlp_engine import score_cv
 from app.services.vector_engine import compress_jd_data, get_embedding
+from app.services.audit_service import log_action
+from app.schemas.common_schema import AuditAction
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["Job Management & Ranking"])
 
@@ -43,7 +46,7 @@ async def rescore_all_applications_for_job(job_id: str, jd_data: dict):
     print(f"Background Task Hoàn tất: Đã chấm lại {len(applications)} CV cho Job {job_id}")
 
 @router.post("/")
-async def create_job(job: JobCreateEnterprise, current_user: CurrentUser = Depends(require_hr)):
+async def create_job(job: JobCreateEnterprise, current_user: CurrentUser = Depends(verify_job_quota)):
     job_dict = job.model_dump()
 
     if current_user.role != UserRole.ADMIN:
@@ -165,9 +168,24 @@ async def update_job(
     })
 
     await JobRepository.update(job_id, update_data, scope_filter)
-    
+
+    # Ghi nhận Audit Log (Trước và Sau)
+    before_state = {k: v for k, v in existing_job.items() if k != "_id"}
+    after_state = {**before_state, **update_data}
+
+    await log_action(
+        actor_id=current_user.id,
+        actor_role=current_user.role,
+        action=AuditAction.JOB_UPDATED if hasattr(AuditAction, 'JOB_UPDATED') else "job_updated",
+        target_type="job",
+        target_id=job_id,
+        note="Cập nhật JD hoặc Trọng số AI",
+        before_state=before_state,
+        after_state=after_state
+    )
+
     background_tasks.add_task(rescore_all_applications_for_job, job_id, update_data)
-    
+
     return {
         "status": "success", 
         "message": "Cập nhật JD thành công. Hệ thống đang tự động chấm lại điểm ứng viên ở chế độ chạy ngầm."

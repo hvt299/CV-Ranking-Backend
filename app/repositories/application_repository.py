@@ -1,64 +1,33 @@
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 from bson import ObjectId
 from app.database.config import get_db, Collections
+from app.repositories.base_repository import BaseRepository
 
-class ApplicationRepository:
-    @staticmethod
-    async def find_one(query: dict) -> Optional[Dict[str, Any]]:
-        db = get_db()
-        return await db[Collections.APPLICATIONS].find_one(query)
+class ApplicationRepository(BaseRepository):
+    collection_name = Collections.APPLICATIONS
 
-    @staticmethod
-    async def get_by_id(app_id: str, scope_filter: dict = None) -> Optional[Dict[str, Any]]:
-        db = get_db()
+    @classmethod
+    async def update_by_query(cls, query: dict, update_data: dict, include_deleted: bool = False) -> int:
+        # Tận dụng update_custom của BaseRepository
+        return await cls.update_custom(query, update_data, include_deleted)
+
+    @classmethod
+    async def delete(cls, app_id: str, scope_filter: dict = None) -> int:
         query = {"_id": ObjectId(app_id)}
         if scope_filter:
             query.update(scope_filter)
-        return await db[Collections.APPLICATIONS].find_one(query)
+        # Tận dụng delete_many của BaseRepository
+        return await cls.delete_many(query)
 
-    @staticmethod
-    async def check_exists(query: dict) -> bool:
+    @classmethod
+    async def aggregate_applications(cls, pipeline: list) -> List[Dict[str, Any]]:
         db = get_db()
-        app = await db[Collections.APPLICATIONS].find_one(query)
-        return app is not None
-
-    @staticmethod
-    async def create(app_data: dict) -> str:
-        db = get_db()
-        result = await db[Collections.APPLICATIONS].insert_one(app_data)
-        return str(result.inserted_id)
-
-    @staticmethod
-    async def update_custom(app_id: str, update_query: dict, scope_filter: dict = None) -> int:
-        db = get_db()
-        query = {"_id": ObjectId(app_id)}
-        if scope_filter:
-            query.update(scope_filter)
-        result = await db[Collections.APPLICATIONS].update_one(query, update_query)
-        return result.modified_count
-
-    @staticmethod
-    async def update_by_query(query: dict, update_data: dict) -> int:
-        db = get_db()
-        result = await db[Collections.APPLICATIONS].update_one(query, update_data)
-        return result.modified_count
-
-    @staticmethod
-    async def delete(app_id: str, scope_filter: dict = None) -> int:
-        db = get_db()
-        query = {"_id": ObjectId(app_id)}
-        if scope_filter:
-            query.update(scope_filter)
-        result = await db[Collections.APPLICATIONS].delete_one(query)
-        return result.deleted_count
+        safe_pipeline = list(pipeline)
         
-    @staticmethod
-    async def delete_many(query: dict) -> int:
-        db = get_db()
-        result = await db[Collections.APPLICATIONS].delete_many(query)
-        return result.deleted_count
-
-    @staticmethod
-    async def aggregate_applications(pipeline: list) -> List[Dict[str, Any]]:
-        db = get_db()
-        return await db[Collections.APPLICATIONS].aggregate(pipeline).to_list(length=None)
+        # Nhúng cờ soft-delete vào pipeline
+        if not safe_pipeline or "$match" not in safe_pipeline[0]:
+            safe_pipeline.insert(0, {"$match": {"deleted_at": None}})
+        elif "deleted_at" not in safe_pipeline[0]["$match"]:
+            safe_pipeline[0]["$match"]["deleted_at"] = None
+            
+        return await db[cls.collection_name].aggregate(safe_pipeline).to_list(length=None)

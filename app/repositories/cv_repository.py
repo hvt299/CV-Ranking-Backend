@@ -1,53 +1,33 @@
 from typing import Optional, List, Dict, Any
 from bson import ObjectId
 from app.database.config import get_db, Collections
+from app.repositories.base_repository import BaseRepository
 
-class CVRepository:
-    @staticmethod
-    async def find_one(query: dict) -> Optional[Dict[str, Any]]:
-        db = get_db()
-        return await db[Collections.CVS].find_one(query)
+class CVRepository(BaseRepository):
+    collection_name = Collections.CVS
 
-    @staticmethod
-    async def get_by_id(cv_id: str, scope_filter: dict = None) -> Optional[Dict[str, Any]]:
-        db = get_db()
-        query = {"_id": ObjectId(cv_id)}
-        if scope_filter:
-            query.update(scope_filter)
-        return await db[Collections.CVS].find_one(query)
-
-    @staticmethod
-    async def get_by_email_and_company(email: str, company_id: str) -> Optional[Dict[str, Any]]:
-        db = get_db()
-        return await db[Collections.CVS].find_one({
+    @classmethod
+    async def get_by_email_and_company(cls, email: str, company_id: str) -> Optional[Dict[str, Any]]:
+        query = {
             "company_id": company_id, 
             "candidate_info.email": email
-        })
+        }
+        return await cls.find_one(query)
 
-    @staticmethod
-    async def create(cv_data: dict) -> str:
-        db = get_db()
-        result = await db[Collections.CVS].insert_one(cv_data)
-        return str(result.inserted_id)
-
-    @staticmethod
-    async def delete(cv_id: str, scope_filter: dict = None) -> int:
-        db = get_db()
+    @classmethod
+    async def delete(cls, cv_id: str, scope_filter: dict = None) -> int:
         query = {"_id": ObjectId(cv_id)}
         if scope_filter:
             query.update(scope_filter)
-        result = await db[Collections.CVS].delete_one(query)
-        return result.deleted_count
+        # Tận dụng delete_many từ BaseRepository
+        return await cls.delete_many(query)
 
-    @staticmethod
-    async def find_all(query: dict = {}, projection: dict = None, limit: int = 500) -> List[Dict[str, Any]]:
+    @classmethod
+    async def find_all(cls, query: dict = {}, projection: dict = None, limit: int = 500, include_deleted: bool = False) -> List[Dict[str, Any]]:
         db = get_db()
-        cursor = db[Collections.CVS].find(query, projection).sort("created_at", -1)
+        query = cls._apply_soft_delete(query, include_deleted)
+        # Giữ nguyên logic sort mới nhất lên đầu
+        cursor = db[cls.collection_name].find(query, projection).sort("created_at", -1)
         if limit:
             cursor = cursor.limit(limit)
         return await cursor.to_list(length=limit)
-        
-    @staticmethod
-    async def count_documents(query: dict) -> int:
-        db = get_db()
-        return await db[Collections.CVS].count_documents(query)

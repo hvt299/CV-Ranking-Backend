@@ -80,40 +80,47 @@ async def list_companies(status: str = None):
         result.append(c)
     return result
 
-@router.patch("/companies/{company_id}/verify", dependencies=[Depends(require_admin)])
+@router.patch("/companies/{company_id}/verify")
 async def verify_company(
     company_id: str, 
     action: CompanyVerifyAction,
     current_admin: CurrentUser = Depends(require_admin)
 ):    
+    existing_company = await CompanyRepository.get_by_id(company_id)
+    if not existing_company:
+        raise HTTPException(status_code=404, detail="Không tìm thấy công ty")
+
     new_status = CompanyStatus.VERIFIED.value if action.approve else CompanyStatus.REJECTED.value
-    
+
     update_data = {
         "status": new_status,
         "verified_by_admin_id": current_admin.id,
         "verified_at": datetime.now(timezone.utc)
     }
-    
+
     if not action.approve:
         update_data["rejection_reason"] = action.rejection_reason
-        
-    modified_count = await CompanyRepository.update(company_id, update_data)
-    
-    if modified_count == 0:
-        raise HTTPException(status_code=404, detail="Không tìm thấy công ty")
+
+    await CompanyRepository.update(company_id, update_data)
+
+    # Tính toán trạng thái Trước/Sau
+    before_state = {k: v for k, v in existing_company.items() if k != "_id"}
+    after_state = {**before_state, **update_data}
 
     audit_action = AuditAction.COMPANY_VERIFIED if action.approve else AuditAction.COMPANY_REJECTED
     note = f"Duyệt thành công" if action.approve else f"Từ chối: {action.rejection_reason}"
-    
+
     await log_action(
         actor_id=current_admin.id,
         actor_role=current_admin.role,
         action=audit_action,
         target_type="company",
         target_id=company_id,
-        note=note
+        note=note,
+        before_state=before_state,
+        after_state=after_state
     )
-        
+
     return {"status": "success", "message": "Đã xử lý trạng thái công ty"}
 
 @router.get("/audit-logs", dependencies=[Depends(require_admin)])
@@ -127,16 +134,37 @@ async def get_audit_logs():
         result.append(lg)
     return result
 
-@router.patch("/companies/{company_id}", dependencies=[Depends(require_admin)])
-async def admin_update_company(company_id: str, update_data: dict = Body(...)):
+@router.patch("/companies/{company_id}")
+async def admin_update_company(
+    company_id: str, 
+    update_data: dict = Body(...),
+    current_admin: CurrentUser = Depends(require_admin)
+):
     allowed_fields = ["name", "tax_code", "industry", "size", "website", "address", "license_file_url"]
     clean_data = {k: v for k, v in update_data.items() if k in allowed_fields}
-    
+
     if not clean_data:
         return {"status": "success"}
-        
-    modified_count = await CompanyRepository.update(company_id, clean_data)
-    if modified_count == 0:
+
+    existing_company = await CompanyRepository.get_by_id(company_id)
+    if not existing_company:
         raise HTTPException(status_code=404, detail="Không tìm thấy công ty")
-        
+
+    await CompanyRepository.update(company_id, clean_data)
+
+    # Tính toán trạng thái Trước/Sau
+    before_state = {k: v for k, v in existing_company.items() if k != "_id"}
+    after_state = {**before_state, **clean_data}
+
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.COMPANY_UPDATED if hasattr(AuditAction, 'COMPANY_UPDATED') else "company_updated",
+        target_type="company",
+        target_id=company_id,
+        note="Admin cập nhật thông tin công ty",
+        before_state=before_state,
+        after_state=after_state
+    )
+
     return {"status": "success", "message": "Cập nhật thành công"}

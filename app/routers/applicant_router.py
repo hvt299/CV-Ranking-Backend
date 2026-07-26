@@ -30,6 +30,24 @@ async def require_applicant(current_user: CurrentUser = Depends(get_current_user
         )
     return current_user
 
+def _prepare_cv_for_scoring(cv_doc: dict, job: dict) -> dict:
+    """Helper function giúp dọn dẹp nợ kỹ thuật (Lặp code) khi format CV payload cho AI"""
+    raw_text = cv_doc.get("raw_text", "")
+    top_sentences = get_top_contributing_sentences(raw_text, job.get("jd_search_text", ""))
+    return {
+        "raw_text": raw_text,
+        "word_count": len((raw_text or "").split()),
+        "skills": cv_doc.get("extracted_skills", []),
+        "years_of_experience": cv_doc.get("candidate_info", {}).get("years_of_experience", 0),
+        "skill_experience": cv_doc.get("candidate_info", {}).get("skill_experience", {}),
+        "education_level": cv_doc.get("candidate_info", {}).get("education_level", "Không đề cập"),
+        "job_hops": cv_doc.get("candidate_info", {}).get("job_hops", 1),
+        "gap_months": cv_doc.get("candidate_info", {}).get("gap_months", 0),
+        "cv_vector": cv_doc.get("cv_vector_ref", []),
+        "fraud_analysis": cv_doc.get("candidate_info", {}).get("fraud_analysis", {}),
+        "top_sentences": top_sentences
+    }
+
 @router.get("/jobs")
 async def list_open_jobs():
     pipeline = [
@@ -287,23 +305,9 @@ async def apply_to_job(
     if not cv_doc:
         raise HTTPException(status_code=404, detail="Không tìm thấy CV trong thư viện cá nhân")
 
-    raw_text = cv_doc.get("raw_text", "")
-    top_sentences = get_top_contributing_sentences(raw_text, job.get("jd_search_text", ""))
-    cover_letter=payload.cover_letter
-
-    scoring_result = score_cv({
-        "raw_text": raw_text,
-        "word_count": len((raw_text or "").split()),
-        "skills": cv_doc.get("extracted_skills", []),
-        "years_of_experience": cv_doc.get("candidate_info", {}).get("years_of_experience", 0),
-        "skill_experience": cv_doc.get("candidate_info", {}).get("skill_experience", {}),
-        "education_level": cv_doc.get("candidate_info", {}).get("education_level", "Không đề cập"),
-        "job_hops": cv_doc.get("candidate_info", {}).get("job_hops", 1),
-        "gap_months": cv_doc.get("candidate_info", {}).get("gap_months", 0),
-        "cv_vector": cv_doc.get("cv_vector_ref", []),
-        "fraud_analysis": cv_doc.get("candidate_info", {}).get("fraud_analysis", {}),
-        "top_sentences": top_sentences
-    }, job)
+    # Sử dụng Helper Function để tái cấu trúc
+    cv_data_for_scoring = _prepare_cv_for_scoring(cv_doc, job)
+    scoring_result = score_cv(cv_data_for_scoring, job)
 
     cv_snapshot = {
         "cv_document_id": str(cv_doc["_id"]),
@@ -323,7 +327,7 @@ async def apply_to_job(
         "status": ApplicationStatus.NEW.value,
         "ai_score": scoring_result,
         "applied_at": datetime.now(timezone.utc),
-        "cover_letter": cover_letter
+        "cover_letter": payload.cover_letter
     }
     await ApplicationRepository.create(app_record)
 
@@ -357,22 +361,9 @@ async def self_score_cv(
     if not cv_doc:
         raise HTTPException(status_code=404, detail="Không tìm thấy CV trong thư viện cá nhân")
 
-    raw_text = cv_doc.get("raw_text", "")
-    top_sentences = get_top_contributing_sentences(raw_text, job.get("jd_search_text", ""))
-
-    scoring_result = score_cv({
-        "raw_text": raw_text,
-        "word_count": len((raw_text or "").split()),
-        "skills": cv_doc.get("extracted_skills", []),
-        "years_of_experience": cv_doc.get("candidate_info", {}).get("years_of_experience", 0),
-        "skill_experience": cv_doc.get("candidate_info", {}).get("skill_experience", {}),
-        "education_level": cv_doc.get("candidate_info", {}).get("education_level", "Không đề cập"),
-        "job_hops": cv_doc.get("candidate_info", {}).get("job_hops", 1),
-        "gap_months": cv_doc.get("candidate_info", {}).get("gap_months", 0),
-        "cv_vector": cv_doc.get("cv_vector_ref", []),
-        "fraud_analysis": cv_doc.get("candidate_info", {}).get("fraud_analysis", {}),
-        "top_sentences": top_sentences
-    }, job)
+    # Tái sử dụng Helper Function
+    cv_data_for_scoring = _prepare_cv_for_scoring(cv_doc, job)
+    scoring_result = score_cv(cv_data_for_scoring, job)
 
     return {
         "status": "success", 

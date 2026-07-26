@@ -1,22 +1,16 @@
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 from app.database.config import get_db, Collections
+from app.repositories.base_repository import BaseRepository
 
-class AuditRepository:
-    @staticmethod
-    async def find_one(query: dict) -> Optional[Dict[str, Any]]:
-        db = get_db()
-        return await db[Collections.AUDIT_LOGS].find_one(query)
-    
-    @staticmethod
-    async def create(log_data: dict) -> str:
-        db = get_db()
-        result = await db[Collections.AUDIT_LOGS].insert_one(log_data)
-        return str(result.inserted_id)
+class AuditRepository(BaseRepository):
+    collection_name = Collections.AUDIT_LOGS
 
-    @staticmethod
-    async def find_all(query: dict = {}, limit: int = 200) -> List[Dict[str, Any]]:
+    @classmethod
+    async def find_all(cls, query: dict = {}, limit: int = 200, include_deleted: bool = False) -> List[Dict[str, Any]]:
         db = get_db()
-        cursor = db[Collections.AUDIT_LOGS].find(query).sort("created_at", -1)
+        query = cls._apply_soft_delete(query, include_deleted)
+        # Audit log luôn cần sort mới nhất lên đầu
+        cursor = db[cls.collection_name].find(query).sort("created_at", -1)
         if limit:
             cursor = cursor.limit(limit)
         return await cursor.to_list(length=limit)
