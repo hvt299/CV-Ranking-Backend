@@ -10,6 +10,7 @@ class AdministrativeUnitCreate(BaseModel):
     parent_code: Optional[str] = None
     valid_from: Optional[datetime] = None
     valid_to: Optional[datetime] = None
+    version: str = Field(default="old")
 
 class AdministrativeUnitResponse(AdministrativeUnitCreate):
     id: str

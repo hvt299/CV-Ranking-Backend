@@ -8,9 +8,10 @@ class KYCDocument(BaseModel):
 class LocationDetail(BaseModel):
     country: str = Field(default="Việt Nam")
     
-    administrative_region_version: str = Field(
-        default="post_2025",
-        description="Phiên bản dữ liệu (VD: 'pre_2025' cho 3 cấp cũ, 'post_2025' cho 2 cấp mới)"
+    # FIX: Đổi từ administrative_region_version thành version, đồng bộ giá trị old/new
+    version: str = Field(
+        default="new",
+        description="Phiên bản dữ liệu địa giới hành chính ('old' hoặc 'new')"
     )
     
     province_code: Optional[str] = None

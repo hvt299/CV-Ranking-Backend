@@ -11,3 +11,4 @@ class AdministrativeUnitDB(BaseModel):
     parent_code: Optional[str] = Field(default=None, description="Mã của tỉnh/huyện cấp trên")
     valid_from: Optional[datetime] = None
     valid_to: Optional[datetime] = Field(default=None, description="Null = Đang còn hiệu lực")
+    version: str = Field(default="old", description="old | new")
