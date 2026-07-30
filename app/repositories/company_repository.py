@@ -13,3 +13,51 @@ class CompanyRepository(BaseRepository):
         if limit:
             cursor = cursor.limit(limit)
         return await cursor.to_list(length=limit)
+
+    @classmethod
+    async def aggregate_companies(cls, pipeline: list) -> List[Dict[str, Any]]:
+        db = get_db()
+        safe_pipeline = list(pipeline)
+
+        if not safe_pipeline or "$match" not in safe_pipeline[0]:
+            safe_pipeline.insert(0, {"$match": {"deleted_at": None}})
+        elif "deleted_at" not in safe_pipeline[0]["$match"]:
+            safe_pipeline[0]["$match"]["deleted_at"] = None
+
+        return await db[cls.collection_name].aggregate(safe_pipeline).to_list(length=100)
+
+    @classmethod
+    async def aggregate_companies(cls, pipeline: list) -> List[Dict[str, Any]]:
+        db = get_db()
+        safe_pipeline = list(pipeline)
+
+        if not safe_pipeline or "$match" not in safe_pipeline[0]:
+            safe_pipeline.insert(0, {"$match": {"deleted_at": None}})
+        elif "deleted_at" not in safe_pipeline[0]["$match"]:
+            safe_pipeline[0]["$match"]["deleted_at"] = None
+
+        return await db[cls.collection_name].aggregate(safe_pipeline).to_list(length=100)
+
+    @classmethod
+    async def aggregate_companies(cls, pipeline: list) -> List[Dict[str, Any]]:
+        db = get_db()
+        safe_pipeline = list(pipeline)
+
+        if not safe_pipeline or "$match" not in safe_pipeline[0]:
+            safe_pipeline.insert(0, {"$match": {"deleted_at": None}})
+        elif "deleted_at" not in safe_pipeline[0]["$match"]:
+            safe_pipeline[0]["$match"]["deleted_at"] = None
+
+        return await db[cls.collection_name].aggregate(safe_pipeline).to_list(length=100)
+
+    @classmethod
+    async def aggregate_companies(cls, pipeline: list) -> List[Dict[str, Any]]:
+        db = get_db()
+        safe_pipeline = list(pipeline)
+
+        if not safe_pipeline or "$match" not in safe_pipeline[0]:
+            safe_pipeline.insert(0, {"$match": {"deleted_at": None}})
+        elif "deleted_at" not in safe_pipeline[0]["$match"]:
+            safe_pipeline[0]["$match"]["deleted_at"] = None
+
+        return await db[cls.collection_name].aggregate(safe_pipeline).to_list(length=100)

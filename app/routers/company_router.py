@@ -1,13 +1,17 @@
 import httpx
+from typing import List
+from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Body
 from datetime import datetime, timedelta, timezone
 import jwt
 
 from app.core.security import CurrentUser, require_hr, JWT_SECRET, ALGORITHM
 from app.schemas.common_schema import CompanyStatus, UserRole
+from app.schemas.company_schema import CompanyResponse
 from app.services.email_service import send_hr_invite_email
 from app.repositories.user_repository import UserRepository
 from app.repositories.company_repository import CompanyRepository
+from bson import ObjectId
 
 router = APIRouter(prefix="/api/v1/companies", tags=["Company & HR Management"])
 
@@ -114,3 +118,50 @@ async def invite_hr_member(
     )
     
     return {"status": "success", "message": f"Đã gửi thư mời thành công đến {email}"}
+
+from bson import ObjectId
+from app.schemas.company_schema import CompanyResponse
+
+@router.get("/public/list", response_model=List[CompanyResponse])
+async def get_public_companies():
+    """
+    API Public lấy danh sách công ty đã được duyệt (VERIFIED).
+    Dành cho khách vãng lai, không yêu cầu token.
+    """
+    pipeline = [
+        {"$match": {"status": CompanyStatus.VERIFIED.value}},
+        {"$sort": {"avg_rating": -1, "view_count": -1, "created_at": -1}},
+        {"$limit": 100}
+    ]
+    
+    companies = await CompanyRepository.aggregate_companies(pipeline)
+    
+    result = []
+    for comp in companies:
+        comp["id"] = str(comp["_id"])
+        result.append(comp)
+        
+    return result
+
+@router.get("/public/{company_id}", response_model=CompanyResponse)
+async def get_public_company_detail(company_id: str):
+    """
+    API Public lấy chi tiết 1 công ty cụ thể theo ID.
+    """
+    try:
+        obj_id = ObjectId(company_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Định dạng ID không hợp lệ")
+
+    company = await CompanyRepository.find_one({"_id": obj_id, "status": CompanyStatus.VERIFIED.value})
+    if not company:
+        raise HTTPException(status_code=404, detail="Không tìm thấy công ty hoặc công ty chưa được xác thực")
+        
+    company["id"] = str(company["_id"])
+    
+    # Tự động tăng view_count
+    current_views = company.get("view_count", 0)
+    await CompanyRepository.update(company_id, {"view_count": current_views + 1})
+    company["view_count"] = current_views + 1
+    
+    return company

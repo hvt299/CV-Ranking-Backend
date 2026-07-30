@@ -319,9 +319,32 @@ async def get_public_job_detail(job_id: str):
     except Exception:
         raise HTTPException(status_code=400, detail="Định dạng ID không hợp lệ")
 
-    job = await JobRepository.find_one({"_id": obj_id, "status": JobStatus.OPEN.value})
-    if not job:
+    pipeline = [
+        {"$match": {"_id": obj_id, "status": JobStatus.OPEN.value}},
+        {
+            "$lookup": {
+                "from": Collections.COMPANIES,
+                "let": {"c_id": {"$toObjectId": "$company_id"}},
+                "pipeline": [
+                    {"$match": {"$expr": {"$eq": ["$_id", "$$c_id"]}}},
+                    {"$project": {"name": 1}}
+                ],
+                "as": "company_info"
+            }
+        },
+        {"$unwind": {"path": "$company_info", "preserveNullAndEmptyArrays": True}}
+    ]
+
+    jobs = await JobRepository.aggregate_jobs(pipeline)
+    
+    if not jobs or len(jobs) == 0:
         raise HTTPException(status_code=404, detail="Không tìm thấy việc làm hoặc chiến dịch đã đóng")
         
+    job = jobs[0]
     job["id"] = str(job["_id"])
+    
+    # Bóc tách tên công ty từ kết quả lookup
+    job["company_name"] = job.get("company_info", {}).get("name", "Công ty Ẩn danh")
+    job.pop("company_info", None)
+    
     return job

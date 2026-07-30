@@ -11,8 +11,10 @@ class JobLevel(str, Enum):
     JUNIOR = "Junior"
     MIDDLE = "Middle"
     SENIOR = "Senior"
+    LEAD = "LEAD"
     MANAGER = "Manager"
     DIRECTOR = "Director"
+    EXECUTIVE = "Executive"
 
 class EmploymentType(str, Enum):
     FULL_TIME = "Full-time"
@@ -20,6 +22,7 @@ class EmploymentType(str, Enum):
     CONTRACT = "Contract"
     FREELANCE = "Freelance"
     INTERNSHIP = "Internship"
+    TEMPORARY = "Temporary"
 
 class WorkMode(str, Enum):
     OFFICE = "Office"

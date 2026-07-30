@@ -1,7 +1,9 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
+from datetime import datetime
 import re
 from app.schemas.shared_schema import LocationDetail, KYCDocument
+from app.schemas.common_schema import CompanyStatus
 
 class CompanyCreate(BaseModel):
     name: str = Field(..., example="TechCorp VN")
@@ -40,3 +42,13 @@ class DepartmentCreate(BaseModel):
     name: str = Field(..., example="Phòng Backend")
     description: Optional[str] = None
     head_user_id: Optional[str] = Field(default=None, description="Trưởng phòng")
+
+class CompanyResponse(CompanyCreate):
+    id: str
+    status: CompanyStatus
+    verified_at: Optional[datetime] = None
+    view_count: int = Field(default=0)
+    avg_rating: float = Field(default=0.0)
+    review_count: int = Field(default=0)
+    created_at: datetime
+    updated_at: Optional[datetime] = None
