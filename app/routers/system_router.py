@@ -10,11 +10,7 @@ router = APIRouter(prefix="/api/v1/system", tags=["System & Master Data"])
 
 @router.get("/locations")
 async def get_locations():
-    """
-    Lấy danh sách Tỉnh/Thành phố.
-    Bền vững: Lấy tất cả (không filter valid_to) để Frontend tự group theo version.
-    """
-    query = {"level": AdminLevel.PROVINCE.value} # Bỏ valid_to để lấy cả cũ và mới
+    query = {"level": AdminLevel.PROVINCE.value}
     locations = await AdministrativeUnitRepository.find_many(query, limit=200)
     
     result = []
@@ -23,7 +19,7 @@ async def get_locations():
             "id": str(loc["_id"]),
             "code": loc.get("code"),
             "name": loc.get("name"),
-            "version": loc.get("version", "old") # Mặc định là old nếu không có
+            "version": loc.get("version", "old")
         })
         
     result.sort(key=lambda x: x.get("name", ""))
@@ -34,9 +30,6 @@ async def search_skills(
     q: Optional[str] = Query(None, description="Từ khóa tìm kiếm kỹ năng"),
     industry: Optional[str] = Query(None, description="Lọc theo ngành nghề (Cross-filtering)")
 ):
-    """
-    Tìm kiếm kỹ năng thông minh, hỗ trợ filter chéo theo ngành nghề.
-    """
     query = {}
     conditions = []
     
@@ -63,4 +56,22 @@ async def search_skills(
         del sk["_id"]
         result.append(sk)
         
+    return result
+
+@router.get("/locations/{parent_code}/children")
+async def get_sub_locations(parent_code: str):
+    query = {"parent_code": parent_code}
+    locations = await AdministrativeUnitRepository.find_many(query, limit=500)
+    
+    result = []
+    for loc in locations:
+        result.append({
+            "id": str(loc["_id"]),
+            "code": loc.get("code"),
+            "name": loc.get("name"),
+            "parent_code": loc.get("parent_code"),
+            "version": loc.get("version", "old")
+        })
+        
+    result.sort(key=lambda x: x.get("name", ""))
     return result

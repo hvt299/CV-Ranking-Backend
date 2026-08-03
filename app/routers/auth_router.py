@@ -12,6 +12,7 @@ from app.schemas.common_schema import UserRole, CompanyStatus, JobStatus, utc_no
 from app.schemas.user_schema import UserCreate
 from app.schemas.auth_schema import UserLogin, Token
 from app.schemas.company_schema import CompanyCreate
+from app.schemas.shared_schema import LocationDetail
 from app.repositories.user_repository import UserRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.job_repository import JobRepository
@@ -62,10 +63,15 @@ class ProfileUpdate(BaseModel):
     full_name: Optional[str] = None
     avatar: Optional[str] = None
     phone: Optional[str] = None
-    address: Optional[str] = None
+    bio: Optional[str] = None
+    job_title_internal: Optional[str] = None
+    extension_phone: Optional[str] = None
+    current_location: Optional[LocationDetail] = None
     github: Optional[str] = None
     linkedin: Optional[str] = None
-    bio: Optional[str] = None
+    headline: Optional[str] = None
+    expected_salary_min: Optional[int] = None
+    expected_salary_max: Optional[int] = None
 
 class PasswordChange(BaseModel):
     current_password: str
@@ -157,8 +163,8 @@ async def register_user(request: Request, response: Response, background_tasks: 
                 "email": payload.email,
                 "full_name": payload.full_name,
                 "hashed_password": hashed_pw,
-                "avatar": auto_avatar,
-                "original_avatar": auto_avatar,
+                "avatar_url": auto_avatar,
+                "original_avatar_url": auto_avatar,
                 "role": token_data.get("role", UserRole.HR_MEMBER.value),
                 "company_id": token_data.get("company_id"),
                 "is_verified": True,
@@ -166,7 +172,6 @@ async def register_user(request: Request, response: Response, background_tasks: 
             }
             user_id = await UserRepository.create(new_user)
             
-            # TRIGGER GIAI ĐOẠN 2.3: Tạo Profile Ứng viên rỗng
             if token_data.get("role") == UserRole.APPLICANT.value:
                 await ApplicantProfileRepository.create({
                     "user_id": str(user_id),
@@ -205,8 +210,8 @@ async def register_user(request: Request, response: Response, background_tasks: 
         "email": payload.email,
         "full_name": payload.full_name,
         "hashed_password": hashed_pw,
-        "avatar": auto_avatar,
-        "original_avatar": auto_avatar,
+        "avatar_url": auto_avatar,
+        "original_avatar_url": auto_avatar,
         "role": payload.role.value,
         "company_id": company_id,
         "is_verified": False,
@@ -215,7 +220,6 @@ async def register_user(request: Request, response: Response, background_tasks: 
 
     user_id = await UserRepository.create(new_user)
     
-    # TRIGGER GIAI ĐOẠN 2.3: Tạo Profile Ứng viên rỗng
     if payload.role == UserRole.APPLICANT:
         await ApplicantProfileRepository.create({
             "user_id": str(user_id),
@@ -354,8 +358,8 @@ async def google_login(request: Request, response: Response, social_request: Soc
                 "email": email,
                 "full_name": full_name,
                 "hashed_password": hashed_pw,
-                "avatar": final_avatar,
-                "original_avatar": final_avatar,
+                "avatar_url": final_avatar,
+                "original_avatar_url": final_avatar,
                 "role": social_request.role.value,
                 "company_id": company_id,
                 "is_verified": True,
@@ -363,7 +367,6 @@ async def google_login(request: Request, response: Response, social_request: Soc
             }
             user_id = await UserRepository.create(new_user)
             
-            # TRIGGER GIAI ĐOẠN 2.3: Tạo Profile Ứng viên rỗng
             if social_request.role == UserRole.APPLICANT:
                 await ApplicantProfileRepository.create({
                     "user_id": str(user_id),
@@ -378,10 +381,10 @@ async def google_login(request: Request, response: Response, social_request: Soc
             if not user.get("is_verified", False):
                 update_fields["is_verified"] = True
 
-            current_avatar = user.get("avatar", "")
+            current_avatar = user.get("avatar_url", "")
             if picture and "ui-avatars.com" in current_avatar:
-                update_fields["avatar"] = picture
-                update_fields["original_avatar"] = picture
+                update_fields["avatar_url"] = picture
+                update_fields["original_avatar_url"] = picture
 
             if update_fields:
                 update_fields["updated_at"] = datetime.now(timezone.utc)
@@ -489,8 +492,8 @@ async def linkedin_login(request: Request, response: Response, social_request: S
                 "email": email,
                 "full_name": full_name,
                 "hashed_password": hashed_pw,
-                "avatar": final_avatar,
-                "original_avatar": final_avatar,
+                "avatar_url": final_avatar,
+                "original_avatar_url": final_avatar,
                 "role": social_request.role.value,
                 "company_id": company_id,
                 "is_verified": True,
@@ -498,7 +501,6 @@ async def linkedin_login(request: Request, response: Response, social_request: S
             }
             user_id = await UserRepository.create(new_user)
             
-            # TRIGGER GIAI ĐOẠN 2.3: Tạo Profile Ứng viên rỗng
             if social_request.role == UserRole.APPLICANT:
                 await ApplicantProfileRepository.create({
                     "user_id": str(user_id),
@@ -513,10 +515,10 @@ async def linkedin_login(request: Request, response: Response, social_request: S
             if not user.get("is_verified", False):
                 update_fields["is_verified"] = True
 
-            current_avatar = user.get("avatar", "")
+            current_avatar = user.get("avatar_url", "")
             if picture and "ui-avatars.com" in current_avatar:
-                update_fields["avatar"] = picture
-                update_fields["original_avatar"] = picture
+                update_fields["avatar_url"] = picture
+                update_fields["original_avatar_url"] = picture
 
             if update_fields:
                 update_fields["updated_at"] = datetime.now(timezone.utc)
@@ -540,24 +542,25 @@ async def get_profile(current_user: CurrentUser = Depends(get_current_user)):
     if not user:
         raise HTTPException(status_code=404, detail="Không tìm thấy thông tin người dùng")
 
-    # Đọc thông tin từ bảng Applicant Profiles thay vì UserDB
     profile = {}
     if user.get("role") == UserRole.APPLICANT.value:
         profile = await ApplicantProfileRepository.get_by_user_id(current_user.id) or {}
-    else:
-        # Fallback an toàn cho role HR nếu có data cũ
-        profile = user.get("profile", {}) or {}
 
     return {
         "id": current_user.id,
         "email": user["email"],
         "full_name": user.get("full_name", ""),
-        "phone": profile.get("phone", ""),
-        "address": profile.get("address", ""),
+        "phone": user.get("phone", ""),
+        "bio": user.get("bio", ""),
+        "job_title_internal": user.get("job_title_internal", ""),
+        "extension_phone": user.get("extension_phone", ""),
+        "current_location": profile.get("current_location", {}),
         "github": profile.get("github", ""),
         "linkedin": profile.get("linkedin", ""),
-        "bio": profile.get("bio", ""),
-        "avatar": user.get("avatar", ""),
+        "headline": profile.get("headline", ""),
+        "expected_salary_min": profile.get("expected_salary_min"),
+        "expected_salary_max": profile.get("expected_salary_max"),
+        "avatar_url": user.get("avatar_url", ""),
         "role": user.get("role"),
         "company_id": user.get("company_id"),
     }
@@ -568,35 +571,40 @@ async def update_profile(profile_data: ProfileUpdate, current_user: CurrentUser 
     if not user:
         raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
 
-    # 1. Cập nhật bảng User (Thông tin cơ bản)
     user_update = {}
-    if profile_data.full_name is not None:
-        user_update["full_name"] = profile_data.full_name
+    for field in ("full_name", "phone", "bio", "job_title_internal", "extension_phone"):
+        value = getattr(profile_data, field, None)
+        if value is not None:
+            user_update[field] = value
+
     if profile_data.avatar is not None:
-        user_update["avatar"] = profile_data.avatar
+        user_update["avatar_url"] = profile_data.avatar
 
     if user_update:
         user_update["updated_at"] = datetime.now(timezone.utc)
         await UserRepository.update(current_user.id, user_update)
 
-    # 2. Cập nhật bảng Applicant Profile (Thông tin mở rộng)
-    profile_update = {}
-    for field in ("phone", "address", "github", "linkedin", "bio"):
-        value = getattr(profile_data, field)
-        if value is not None:
-            profile_update[field] = value
+    if user.get("role") == UserRole.APPLICANT.value:
+        profile_update = {}
+        for field in ("github", "linkedin", "headline", "expected_salary_min", "expected_salary_max"):
+            value = getattr(profile_data, field, None)
+            if value is not None:
+                profile_update[field] = value
+                
+        if profile_data.current_location is not None:
+            profile_update["current_location"] = profile_data.current_location.model_dump(exclude_unset=True)
 
-    if profile_update and user.get("role") == UserRole.APPLICANT.value:
-        profile_update["updated_at"] = datetime.now(timezone.utc)
-        existing_profile = await ApplicantProfileRepository.get_by_user_id(current_user.id)
-        
-        if existing_profile:
-            await ApplicantProfileRepository.update(str(existing_profile["_id"]), profile_update)
-        else:
-            profile_update["user_id"] = current_user.id
-            profile_update["created_at"] = datetime.now(timezone.utc)
-            profile_update["deleted_at"] = None
-            await ApplicantProfileRepository.create(profile_update)
+        if profile_update:
+            profile_update["updated_at"] = datetime.now(timezone.utc)
+            existing_profile = await ApplicantProfileRepository.get_by_user_id(current_user.id)
+            
+            if existing_profile:
+                await ApplicantProfileRepository.update(str(existing_profile["_id"]), profile_update)
+            else:
+                profile_update["user_id"] = current_user.id
+                profile_update["created_at"] = datetime.now(timezone.utc)
+                profile_update["deleted_at"] = None
+                await ApplicantProfileRepository.create(profile_update)
 
     return {"status": "success", "message": "Cập nhật thông tin thành công"}
 
@@ -629,7 +637,7 @@ async def get_current_user_profile(current_user: CurrentUser = Depends(get_curre
         "id": current_user.id,
         "email": user["email"],
         "full_name": user.get("full_name", "User"),
-        "avatar": user.get("avatar", ""),
+        "avatar_url": user.get("avatar_url", ""),
         "role": user.get("role"),
         "company_id": user.get("company_id"),
     }
@@ -666,13 +674,11 @@ async def anonymize_account(current_user: CurrentUser = Depends(get_current_user
             })
             
             if hr_count > 1:
-                # Có người khác -> Bắt buộc nhượng quyền
                 raise HTTPException(
                     status_code=400, 
                     detail="Công ty đang có thành viên khác. Bạn phải chuyển quyền Owner trước khi xóa tài khoản."
                 )
             else:
-                # HR_OWNER cô độc -> Xóa mềm công ty, đóng mọi Job
                 await CompanyRepository.update(
                     user["company_id"], 
                     {
@@ -691,20 +697,18 @@ async def anonymize_account(current_user: CurrentUser = Depends(get_current_user
     timestamp = int(time.time())
     anonymized_email = f"deleted_{timestamp}_{current_user.id}@anonymized.local"
     
-    # Reset password để cắt đứt mọi nỗ lực Brute-force
     random_pw = get_password_hash(secrets.token_urlsafe(32)) 
     
     update_data = {
         "email": anonymized_email,
         "hashed_password": random_pw,
         "full_name": "Người dùng đã xóa",
-        "avatar": "",
-        "original_avatar": "",
+        "avatar_url": "",
+        "original_avatar_url": "",
         "is_active": False,
         "deleted_at": utc_now(),
     }
     
-    # Quét sạch thông tin định danh cá nhân (PII)
     unset_data = {
         "phone": "",
         "bio": "",
@@ -719,7 +723,6 @@ async def anonymize_account(current_user: CurrentUser = Depends(get_current_user
         {"$set": update_data, "$unset": unset_data}
     )
     
-    # Xóa mềm Profile Applicant nếu có
     if user.get("role") == UserRole.APPLICANT.value:
         await ApplicantProfileRepository.update_custom(
             {"user_id": current_user.id},

@@ -46,7 +46,7 @@ async def list_users():
         "reset_password_token": 0, 
         "reset_password_expires": 0
     }
-    users = await UserRepository.find_all({}, projection=projection, limit=500)
+    users = await UserRepository.find_many({}, projection=projection, limit=500)
     
     result = []
     for u in users:
@@ -71,7 +71,7 @@ async def list_companies(status: str = None):
     if status:
         query["status"] = status
         
-    companies = await CompanyRepository.find_all(query, limit=500)
+    companies = await CompanyRepository.find_many(query, limit=500)
     
     result = []
     for c in companies:
@@ -103,7 +103,6 @@ async def verify_company(
 
     await CompanyRepository.update(company_id, update_data)
 
-    # Tính toán trạng thái Trước/Sau
     before_state = {k: v for k, v in existing_company.items() if k != "_id"}
     after_state = {**before_state, **update_data}
 
@@ -125,7 +124,7 @@ async def verify_company(
 
 @router.get("/audit-logs", dependencies=[Depends(require_admin)])
 async def get_audit_logs():
-    logs = await AuditRepository.find_all({}, limit=200)
+    logs = await AuditRepository.find_many({}, limit=200)
     
     result = []
     for lg in logs:
@@ -152,7 +151,6 @@ async def admin_update_company(
 
     await CompanyRepository.update(company_id, clean_data)
 
-    # Tính toán trạng thái Trước/Sau
     before_state = {k: v for k, v in existing_company.items() if k != "_id"}
     after_state = {**before_state, **clean_data}
 

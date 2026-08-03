@@ -43,7 +43,7 @@ async def lookup_tax_code(tax_code: str):
 @router.get("/members", dependencies=[Depends(require_hr)])
 async def get_company_members(current_user: CurrentUser = Depends(require_hr)):
     projection = {"hashed_password": 0, "reset_password_token": 0, "reset_password_expires": 0}
-    members = await UserRepository.find_all({"company_id": current_user.company_id}, projection=projection, limit=100)
+    members = await UserRepository.find_many({"company_id": current_user.company_id}, projection=projection, limit=100)
     
     result = []
     for m in members:
@@ -124,10 +124,6 @@ from app.schemas.company_schema import CompanyResponse
 
 @router.get("/public/list", response_model=List[CompanyResponse])
 async def get_public_companies():
-    """
-    API Public lấy danh sách công ty đã được duyệt (VERIFIED).
-    Dành cho khách vãng lai, không yêu cầu token.
-    """
     pipeline = [
         {"$match": {"status": CompanyStatus.VERIFIED.value}},
         {"$sort": {"avg_rating": -1, "view_count": -1, "created_at": -1}},
@@ -145,9 +141,6 @@ async def get_public_companies():
 
 @router.get("/public/{company_id}", response_model=CompanyResponse)
 async def get_public_company_detail(company_id: str):
-    """
-    API Public lấy chi tiết 1 công ty cụ thể theo ID.
-    """
     try:
         obj_id = ObjectId(company_id)
     except Exception:
@@ -159,7 +152,6 @@ async def get_public_company_detail(company_id: str):
         
     company["id"] = str(company["_id"])
     
-    # Tự động tăng view_count
     current_views = company.get("view_count", 0)
     await CompanyRepository.update(company_id, {"view_count": current_views + 1})
     company["view_count"] = current_views + 1

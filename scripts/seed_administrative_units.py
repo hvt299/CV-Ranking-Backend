@@ -32,13 +32,10 @@ async def seed_locations():
             print(f"Bỏ qua {filename} vì không tìm thấy file.")
             continue
             
-        # ÁP DỤNG NGHIỆP VỤ THỜI GIAN THỰC (Time-Series)
         if version == "old":
-            # Từ 1/12/2024 đến 23:59:59 30/06/2025
             valid_from = datetime(2024, 12, 1, 0, 0, 0, tzinfo=timezone.utc)
             valid_to = datetime(2025, 6, 30, 23, 59, 59, tzinfo=timezone.utc)
         else:
-            # Từ 1/07/2025 trở đi (Vô thời hạn)
             valid_from = datetime(2025, 7, 1, 0, 0, 0, tzinfo=timezone.utc)
             valid_to = None
             
@@ -54,7 +51,6 @@ async def seed_locations():
                     "deleted_at": None
                 }
                 
-                # Trích xuất Parent Code an toàn (tránh để chuỗi rỗng '' mà chuyển hẳn thành None nếu không có)
                 if unit_type == "province":
                     doc["code"] = row.get("province_code") or row.get("code", "")
                     doc["name"] = row.get("province_name") or row.get("name", "")
@@ -70,7 +66,12 @@ async def seed_locations():
                     doc["code"] = row.get("ward_code") or row.get("code", "")
                     doc["name"] = row.get("ward_name") or row.get("name", "")
                     doc["level"] = AdminLevel.WARD.value
-                    parent_code = row.get("district_code", "")
+                    
+                    if version == "old":
+                        parent_code = row.get("district_code", "")
+                    else:
+                        parent_code = row.get("province_code", "")
+                        
                     doc["parent_code"] = parent_code if parent_code else None
                 
                 batch.append(doc)
