@@ -145,12 +145,12 @@ async def update_job(
                 detail="Công ty của bạn chưa được xác thực (KYC). Vui lòng chờ Admin duyệt để có thể cập nhật chiến dịch tuyển dụng."
             )
     
-    existing_job = await JobRepository.get_by_id(job_id, scope_filter)
+    existing_job = await JobRepository.get_by_id(job_id, extra_query=scope_filter)
     
     if not existing_job:
         raise HTTPException(status_code=404, detail="Không tìm thấy Job hoặc bạn không có quyền chỉnh sửa")
 
-    update_data = job_update.model_dump(exclude_unset=True)
+    update_data = job_update.model_dump()
     
     if current_user.role != UserRole.ADMIN:
         update_data.pop("is_hot", None)
@@ -167,9 +167,8 @@ async def update_job(
         "jd_vector_ref": new_jd_vector
     })
 
-    await JobRepository.update(job_id, update_data, scope_filter)
+    await JobRepository.update(job_id, update_data, extra_query=scope_filter)
 
-    # Ghi nhận Audit Log (Trước và Sau)
     before_state = {k: v for k, v in existing_job.items() if k != "_id"}
     after_state = {**before_state, **update_data}
 
@@ -193,7 +192,7 @@ async def update_job(
 
 @router.delete("/{job_id}", dependencies=[Depends(require_hr)])
 async def delete_job(job_id: str, scope_filter: dict = Depends(get_scope_filter)):
-    deleted_count = await JobRepository.delete(job_id, scope_filter)
+    deleted_count = await JobRepository.delete(job_id, extra_query=scope_filter)
     if deleted_count == 0:
         raise HTTPException(status_code=404, detail="Không tìm thấy Job hoặc bạn không có quyền xóa")
         
@@ -203,7 +202,7 @@ async def delete_job(job_id: str, scope_filter: dict = Depends(get_scope_filter)
 @router.get("/{job_id}/ranking", dependencies=[Depends(require_hr_or_admin)])
 async def get_job_ranking(job_id: str, scope_filter: dict = Depends(get_scope_filter)):
     try:
-        job = await JobRepository.get_by_id(job_id, scope_filter)
+        job = await JobRepository.get_by_id(job_id, extra_query=scope_filter)
     except:
         raise HTTPException(status_code=400, detail="Mã Job không hợp lệ")
         
@@ -277,10 +276,6 @@ async def get_dashboard_analytics(scope_filter: dict = Depends(get_scope_filter)
         "status_breakdown": status_breakdown
     }
 
-# ==========================================
-# PUBLIC API (DÀNH CHO KHÁCH VÃNG LAI)
-# ==========================================
-
 @router.get("/public/list", response_model=List[JobResponse])
 async def get_public_jobs():
     pipeline = [
@@ -343,7 +338,6 @@ async def get_public_job_detail(job_id: str):
     job = jobs[0]
     job["id"] = str(job["_id"])
     
-    # Bóc tách tên công ty từ kết quả lookup
     job["company_name"] = job.get("company_info", {}).get("name", "Công ty Ẩn danh")
     job.pop("company_info", None)
     

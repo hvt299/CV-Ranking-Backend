@@ -1,13 +1,13 @@
 from typing import Optional, List, Dict, Any
 from bson import ObjectId
 from app.database.config import get_db
+from datetime import datetime, timezone
 
 class BaseRepository:
     collection_name: str = None
 
     @classmethod
     def _apply_soft_delete(cls, query: dict, include_deleted: bool) -> dict:
-        """Tự động nhúng cờ lọc dữ liệu rác (Xóa mềm)"""
         if not include_deleted and "deleted_at" not in query:
             query["deleted_at"] = None
         return query
@@ -19,9 +19,11 @@ class BaseRepository:
         return await db[cls.collection_name].find_one(query)
 
     @classmethod
-    async def get_by_id(cls, doc_id: str, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    async def get_by_id(cls, doc_id: str, extra_query: Optional[dict] = None, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
         db = get_db()
         query = {"_id": ObjectId(doc_id)}
+        if extra_query:
+            query.update(extra_query)
         query = cls._apply_soft_delete(query, include_deleted)
         return await db[cls.collection_name].find_one(query)
 
@@ -32,9 +34,11 @@ class BaseRepository:
         return str(result.inserted_id)
 
     @classmethod
-    async def update(cls, doc_id: str, update_data: dict, include_deleted: bool = False) -> int:
+    async def update(cls, doc_id: str, update_data: dict, extra_query: Optional[dict] = None, include_deleted: bool = False) -> int:
         db = get_db()
         query = {"_id": ObjectId(doc_id)}
+        if extra_query:
+            query.update(extra_query)
         query = cls._apply_soft_delete(query, include_deleted)
         result = await db[cls.collection_name].update_one(query, {"$set": update_data})
         return result.modified_count
@@ -43,7 +47,6 @@ class BaseRepository:
     async def update_custom(cls, query: dict, update_data: dict, include_deleted: bool = False) -> int:
         db = get_db()
         query = cls._apply_soft_delete(query, include_deleted)
-        # update_data có thể chứa $set, $unset, $push...
         result = await db[cls.collection_name].update_one(query, update_data)
         return result.modified_count
         
@@ -77,3 +80,19 @@ class BaseRepository:
         db = get_db()
         result = await db[cls.collection_name].delete_many(query)
         return result.deleted_count
+
+    @classmethod
+    async def delete(cls, doc_id: str, extra_query: Optional[dict] = None, hard_delete: bool = False) -> int:
+        db = get_db()
+        query = {"_id": ObjectId(doc_id)}
+        if extra_query:
+            query.update(extra_query)
+
+        if hard_delete:
+            result = await db[cls.collection_name].delete_one(query)
+            return result.deleted_count
+
+        result = await db[cls.collection_name].update_one(
+            query, {"$set": {"deleted_at": datetime.now(timezone.utc)}}
+        )
+        return result.modified_count

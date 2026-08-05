@@ -29,6 +29,10 @@ MAX_FILE_SIZE = 5 * 1024 * 1024
 class MapCVRequest(BaseModel):
     job_id: str
 
+class MapBatchCVRequest(BaseModel):
+    cv_ids: list[str]
+    job_id: str
+
 def get_notification_content(status: str, job_title: str):
     status_map = {
         ApplicationStatus.NEW.value: ("Hồ sơ đã được tiếp nhận", f"Hồ sơ của bạn cho vị trí '{job_title}' đã được tiếp nhận và đang chờ xem xét.", NotificationType.INFO.value),
@@ -204,6 +208,106 @@ async def map_cv_to_job(
         "ai_score": scoring_result
     }
 
+@router.post("/map-batch")
+async def map_multiple_cvs_to_job(
+    payload: MapBatchCVRequest,
+    current_user: CurrentUser = Depends(require_hr),
+    scope_filter: dict = Depends(get_scope_filter)
+):
+    job_id = payload.job_id
+    cv_ids = payload.cv_ids
+
+    if not cv_ids:
+         raise HTTPException(status_code=400, detail="Danh sách CV không được để trống")
+
+    try:
+        jd_data = await JobRepository.find_one({"_id": ObjectId(job_id), **scope_filter})
+    except:
+        raise HTTPException(status_code=400, detail="Mã Job ID không hợp lệ")
+        
+    if not jd_data:
+        raise HTTPException(status_code=404, detail="Không tìm thấy chiến dịch tuyển dụng")
+
+    deadline = jd_data.get("deadline")
+    if deadline:
+        now_utc = datetime.now(timezone.utc)
+        deadline_dt = datetime.fromisoformat(deadline.replace("Z", "+00:00")) if isinstance(deadline, str) else deadline
+        if deadline_dt.tzinfo is None:
+            deadline_dt = deadline_dt.replace(tzinfo=timezone.utc)
+            
+        if now_utc > deadline_dt:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Chiến dịch đã hết hạn vào {deadline_dt.strftime('%d/%m/%Y %H:%M')} (UTC)"
+            )
+
+    successful_maps = 0
+    errors = []
+
+    jd_search_text = jd_data.get("jd_search_text", "")
+
+    for cv_id in cv_ids:
+        try:
+            cv_record = await CVRepository.find_one({"_id": ObjectId(cv_id), **scope_filter})
+            if not cv_record:
+                errors.append(f"Không tìm thấy CV ID: {cv_id}")
+                continue
+
+            existing_app = await ApplicationRepository.find_one({"job_id": job_id, "cv_snapshot.cv_document_id": cv_id})
+            if existing_app:
+                errors.append(f"CV {cv_record.get('filename')} đã tồn tại trong chiến dịch này")
+                continue
+
+            raw_text = cv_record.get("raw_text", "")
+            top_sentences = get_top_contributing_sentences(raw_text, jd_search_text)
+
+            cv_data_for_scoring = {
+                "raw_text": raw_text,
+                "word_count": len(raw_text.split()),
+                "skills": cv_record.get("extracted_skills", []),
+                "years_of_experience": cv_record.get("candidate_info", {}).get("years_of_experience", 0),
+                "skill_experience": cv_record.get("candidate_info", {}).get("skill_experience", {}),
+                "education_level": cv_record.get("candidate_info", {}).get("education_level", "Không đề cập"),
+                "job_hops": cv_record.get("candidate_info", {}).get("job_hops", 1),       
+                "gap_months": cv_record.get("candidate_info", {}).get("gap_months", 0),   
+                "cv_vector": cv_record.get("cv_vector_ref", []),
+                "fraud_analysis": cv_record.get("candidate_info", {}).get("fraud_analysis", {}),
+                "top_sentences": top_sentences
+            }
+
+            scoring_result = score_cv(cv_data_for_scoring, jd_data)
+
+            cv_snapshot = {
+                "cv_document_id": cv_id,
+                "display_name": cv_record.get("display_name", cv_record.get("filename")),
+                "filename": cv_record.get("filename"),
+                "file_url": cv_record.get("file_url", ""),
+                "candidate_info": cv_record.get("candidate_info", {}),
+                "extracted_skills": cv_record.get("extracted_skills", [])
+            }
+
+            application_record = {
+                "job_id": job_id,
+                "cv_snapshot": cv_snapshot,
+                "company_id": current_user.company_id,
+                "source": ApplicationSource.HR_SOURCED.value,
+                "status": ApplicationStatus.NEW.value,
+                "ai_score": scoring_result,
+                "applied_at": datetime.now(timezone.utc)
+            }
+
+            await ApplicationRepository.create(application_record)
+            successful_maps += 1
+
+        except Exception as e:
+            errors.append(f"Lỗi khi xử lý CV ID {cv_id}: {str(e)}")
+
+    return {
+        "message": f"Đã ghép nối thành công {successful_maps}/{len(cv_ids)} CV.",
+        "successful_maps": successful_maps,
+        "errors": errors
+    }
+
 @router.patch("/applications/{app_id}")
 async def update_application_status(
     app_id: str, 
@@ -223,7 +327,6 @@ async def update_application_status(
         if update_data.status is not None and update_data.status.value != current_app.get("status"):
             update_query["$set"]["status"] = update_data.status.value
 
-            # 1. Ghi nhận lịch sử kéo/thả Kanban
             update_query["$push"]["status_history"] = {
                 "from_status": current_app.get("status"),
                 "to_status": update_data.status.value,
@@ -231,7 +334,6 @@ async def update_application_status(
                 "changed_at": datetime.now(timezone.utc)
             }
 
-            # 2. Lưu lịch phỏng vấn vào DB nếu HR gửi mail
             if update_data.status.value == ApplicationStatus.INTERVIEW.value and update_data.interview_schedule:
                 schedule_dict = update_data.interview_schedule.model_dump()
                 schedule_dict["created_at"] = datetime.now(timezone.utc)
