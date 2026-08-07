@@ -325,34 +325,48 @@ async def google_login(request: Request, response: Response, social_request: Soc
         user = await UserRepository.get_by_email(email)
 
         if not user:
-            if not social_request.role:
-                return JSONResponse(
-                    status_code=202,
-                    content={
-                        "action": "require_role",
-                        "message": "Vui lòng chọn vai trò để hoàn tất",
-                        "email": email
-                    }
-                )
-
-            if social_request.role not in SELF_REGISTERABLE_ROLES:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Chỉ có thể đăng ký với vai trò 'applicant' hoặc 'hr_owner' qua Google.",
-                )
-
             company_id = None
-            if social_request.role == UserRole.HR_OWNER:
-                if not social_request.company_name or not social_request.tax_code:
+            assigned_role = social_request.role
+
+            if social_request.invite_token:
+                try:
+                    token_data = jwt.decode(social_request.invite_token, JWT_SECRET, algorithms=[ALGORITHM])
+                    if token_data.get("email") != email:
+                        raise HTTPException(status_code=400, detail="Email từ Google không khớp với email được mời!")
+                    assigned_role = token_data.get("role", UserRole.HR_MEMBER.value)
+                    company_id = token_data.get("company_id")
+                except jwt.PyJWTError:
+                    raise HTTPException(status_code=400, detail="Link mời không hợp lệ hoặc đã hết hạn.")
+            else:
+                if not assigned_role:
+                    return JSONResponse(
+                        status_code=202,
+                        content={
+                            "action": "require_role",
+                            "message": "Vui lòng chọn vai trò để hoàn tất",
+                            "email": email
+                        }
+                    )
+
+                if assigned_role not in SELF_REGISTERABLE_ROLES:
                     raise HTTPException(
                         status_code=400,
-                        detail="company_name và tax_code là bắt buộc khi đăng ký với vai trò hr_owner.",
+                        detail="Chỉ có thể đăng ký với vai trò 'applicant' hoặc 'hr_owner' qua Google.",
                     )
-                company_id = await _create_company(social_request)
+
+                if assigned_role == UserRole.HR_OWNER:
+                    if not social_request.company_name or not social_request.tax_code:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="company_name và tax_code là bắt buộc khi đăng ký với vai trò hr_owner.",
+                        )
+                    company_id = await _create_company(social_request)
 
             random_pw = secrets.token_urlsafe(32)
             hashed_pw = get_password_hash(random_pw)
             final_avatar = picture if picture else _make_avatar_url(full_name)
+            
+            role_val = assigned_role.value if hasattr(assigned_role, 'value') else assigned_role
 
             new_user = {
                 "email": email,
@@ -360,14 +374,14 @@ async def google_login(request: Request, response: Response, social_request: Soc
                 "hashed_password": hashed_pw,
                 "avatar_url": final_avatar,
                 "original_avatar_url": final_avatar,
-                "role": social_request.role.value,
+                "role": role_val,
                 "company_id": company_id,
                 "is_verified": True,
                 "created_at": datetime.now(timezone.utc)
             }
             user_id = await UserRepository.create(new_user)
             
-            if social_request.role == UserRole.APPLICANT:
+            if role_val == UserRole.APPLICANT.value or role_val == UserRole.APPLICANT:
                 await ApplicantProfileRepository.create({
                     "user_id": str(user_id),
                     "created_at": datetime.now(timezone.utc),
@@ -378,6 +392,16 @@ async def google_login(request: Request, response: Response, social_request: Soc
 
         else:
             update_fields = {}
+            
+            if social_request.invite_token:
+                try:
+                    token_data = jwt.decode(social_request.invite_token, JWT_SECRET, algorithms=[ALGORITHM])
+                    if token_data.get("email") == email:
+                        update_fields["role"] = token_data.get("role", UserRole.HR_MEMBER.value)
+                        update_fields["company_id"] = token_data.get("company_id")
+                except jwt.PyJWTError:
+                    pass
+
             if not user.get("is_verified", False):
                 update_fields["is_verified"] = True
 
@@ -459,34 +483,48 @@ async def linkedin_login(request: Request, response: Response, social_request: S
         user = await UserRepository.get_by_email(email)
 
         if not user:
-            if not social_request.role:
-                return JSONResponse(
-                    status_code=202,
-                    content={
-                        "action": "require_role",
-                        "message": "Vui lòng chọn vai trò để hoàn tất",
-                        "email": email
-                    }
-                )
-
-            if social_request.role not in SELF_REGISTERABLE_ROLES:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Chỉ có thể đăng ký với vai trò 'applicant' hoặc 'hr_owner' qua LinkedIn.",
-                )
-
             company_id = None
-            if social_request.role == UserRole.HR_OWNER:
-                if not social_request.company_name or not social_request.tax_code:
+            assigned_role = social_request.role
+
+            if social_request.invite_token:
+                try:
+                    token_data = jwt.decode(social_request.invite_token, JWT_SECRET, algorithms=[ALGORITHM])
+                    if token_data.get("email") != email:
+                        raise HTTPException(status_code=400, detail="Email từ LinkedIn không khớp với email được mời!")
+                    assigned_role = token_data.get("role", UserRole.HR_MEMBER.value)
+                    company_id = token_data.get("company_id")
+                except jwt.PyJWTError:
+                    raise HTTPException(status_code=400, detail="Link mời không hợp lệ hoặc đã hết hạn.")
+            else:
+                if not assigned_role:
+                    return JSONResponse(
+                        status_code=202,
+                        content={
+                            "action": "require_role",
+                            "message": "Vui lòng chọn vai trò để hoàn tất",
+                            "email": email
+                        }
+                    )
+
+                if assigned_role not in SELF_REGISTERABLE_ROLES:
                     raise HTTPException(
                         status_code=400,
-                        detail="company_name và tax_code là bắt buộc khi đăng ký với vai trò hr_owner.",
+                        detail="Chỉ có thể đăng ký với vai trò 'applicant' hoặc 'hr_owner' qua LinkedIn.",
                     )
-                company_id = await _create_company(social_request)
+
+                if assigned_role == UserRole.HR_OWNER:
+                    if not social_request.company_name or not social_request.tax_code:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="company_name và tax_code là bắt buộc khi đăng ký với vai trò hr_owner.",
+                        )
+                    company_id = await _create_company(social_request)
 
             random_pw = secrets.token_urlsafe(32)
             hashed_pw = get_password_hash(random_pw)
             final_avatar = picture if picture else _make_avatar_url(full_name)
+            
+            role_val = assigned_role.value if hasattr(assigned_role, 'value') else assigned_role
 
             new_user = {
                 "email": email,
@@ -494,14 +532,14 @@ async def linkedin_login(request: Request, response: Response, social_request: S
                 "hashed_password": hashed_pw,
                 "avatar_url": final_avatar,
                 "original_avatar_url": final_avatar,
-                "role": social_request.role.value,
+                "role": role_val,
                 "company_id": company_id,
                 "is_verified": True,
                 "created_at": datetime.now(timezone.utc)
             }
             user_id = await UserRepository.create(new_user)
             
-            if social_request.role == UserRole.APPLICANT:
+            if role_val == UserRole.APPLICANT.value or role_val == UserRole.APPLICANT:
                 await ApplicantProfileRepository.create({
                     "user_id": str(user_id),
                     "created_at": datetime.now(timezone.utc),
@@ -512,6 +550,15 @@ async def linkedin_login(request: Request, response: Response, social_request: S
 
         else:
             update_fields = {}
+            if social_request.invite_token:
+                try:
+                    token_data = jwt.decode(social_request.invite_token, JWT_SECRET, algorithms=[ALGORITHM])
+                    if token_data.get("email") == email:
+                        update_fields["role"] = token_data.get("role", UserRole.HR_MEMBER.value)
+                        update_fields["company_id"] = token_data.get("company_id")
+                except jwt.PyJWTError:
+                    pass
+
             if not user.get("is_verified", False):
                 update_fields["is_verified"] = True
 

@@ -10,6 +10,7 @@ from app.schemas.common_schema import CompanyStatus, UserRole
 from app.schemas.company_schema import CompanyResponse
 from app.schemas.shared_schema import LocationDetail
 from app.services.email_service import send_hr_invite_email
+from app.services.analytics_service import AnalyticsService
 from app.repositories.user_repository import UserRepository
 from app.repositories.company_repository import CompanyRepository
 import re
@@ -245,8 +246,18 @@ async def invite_hr_member(
     
     return {"status": "success", "message": f"Đã gửi thư mời thành công đến {email}"}
 
-from bson import ObjectId
-from app.schemas.company_schema import CompanyResponse
+@router.get("/{company_id}/analytics", dependencies=[Depends(require_hr)])
+async def get_company_analytics(company_id: str, current_user: CurrentUser = Depends(require_hr)):
+    if current_user.role != UserRole.HR_OWNER.value or current_user.company_id != company_id:
+        raise HTTPException(
+            status_code=403, 
+            detail="Bạn không có quyền xem dữ liệu phân tích của công ty này"
+        )
+    
+    result = await AnalyticsService.get_company_pro_analytics(company_id)
+    
+    result["status"] = "success"
+    return result
 
 @router.get("/public/list", response_model=List[CompanyResponse])
 async def get_public_companies():

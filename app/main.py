@@ -23,7 +23,7 @@ async def lifespan(app: FastAPI):
     await close_mongo_connection()
 
 app = FastAPI(
-    title="AI CV Ranking ATS",
+    title="ATS SYSTEM",
     version="2.0.0", 
     description="Hệ thống Quản lý Tuyển dụng và Đánh giá Ứng viên tự động bằng AI",
     lifespan=lifespan
@@ -58,7 +58,7 @@ app.include_router(system_router.router)
 
 @app.get("/", tags=["Health Check"])
 def root():
-    return {"message": "CV Ranking System API is running smoothly!"}
+    return {"message": "ATS System API is running smoothly!"}
 
 @app.get("/ping", tags=["Health Check"])
 def ping():

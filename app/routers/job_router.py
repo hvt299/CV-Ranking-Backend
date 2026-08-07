@@ -6,7 +6,7 @@ from app.core.security import CurrentUser, require_hr, require_hr_or_admin, get_
 from app.middleware.subscription import verify_job_quota
 from app.database.config import Collections
 from app.schemas.job_schema import JobCreateEnterprise, JobResponse
-from app.schemas.common_schema import JobStatus, UserRole, ApplicationStatus, CompanyStatus
+from app.schemas.common_schema import JobStatus, UserRole, CompanyStatus
 from app.repositories.job_repository import JobRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.application_repository import ApplicationRepository
@@ -251,30 +251,23 @@ async def get_job_ranking(job_id: str, scope_filter: dict = Depends(get_scope_fi
         "leaderboard": leaderboard
     }
 
-@router.get("/dashboard/analytics", dependencies=[Depends(require_hr_or_admin)])
-async def get_dashboard_analytics(scope_filter: dict = Depends(get_scope_filter)):
-    total_jobs = await JobRepository.count_documents(scope_filter)
-    open_jobs = await JobRepository.count_documents({"status": JobStatus.OPEN.value, **scope_filter})
-    total_cvs_in_pool = await CVRepository.count_documents(scope_filter)
-    
-    pipeline = []
-    if scope_filter:
-        pipeline.append({"$match": scope_filter})
-    pipeline.append({"$group": {"_id": "$status", "count": {"$sum": 1}}})
-    
-    status_counts = await ApplicationRepository.aggregate_applications(pipeline)
-    
-    status_breakdown = {
-        item["_id"] if item["_id"] else ApplicationStatus.NEW.value: item["count"] 
-        for item in status_counts
-    }
-    
-    return {
-        "total_jobs": total_jobs,
-        "open_jobs": open_jobs,
-        "total_cvs_in_pool": total_cvs_in_pool,
-        "status_breakdown": status_breakdown
-    }
+from fastapi import Query
+from app.services.analytics_service import AnalyticsService
+
+@router.get("/dashboard/metrics", dependencies=[Depends(require_hr)])
+async def get_dashboard_metrics(
+    scope: str = Query("company", description="Góc nhìn: 'company' (Owner) hoặc 'me' (Member)"),
+    current_user: CurrentUser = Depends(require_hr)
+):
+    if scope == "me":
+        data = await AnalyticsService.get_member_workspace_metrics(current_user.id)
+        return {"status": "success", "data": data}
+    else:
+        if current_user.role != UserRole.HR_OWNER.value:
+            raise HTTPException(status_code=403, detail="Chỉ HR Owner mới được xem số liệu toàn công ty")
+            
+        data = await AnalyticsService.get_owner_dashboard_metrics(current_user.company_id)
+        return {"status": "success", "data": data}
 
 @router.get("/public/list", response_model=List[JobResponse])
 async def get_public_jobs():
