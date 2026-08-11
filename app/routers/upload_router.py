@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
-from app.auth import get_current_user
+from app.core.security import get_current_user
 from app.services.storage_service import upload_file_to_cloudinary
 
 router = APIRouter(prefix="/api/v1/upload", tags=["Upload"])

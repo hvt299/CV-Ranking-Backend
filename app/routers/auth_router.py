@@ -7,9 +7,21 @@ import secrets
 import hashlib
 from fastapi.responses import JSONResponse
 import jwt
-from app.database.config import get_db, Collections
-from app.database.models import CompanyStatus, UserCreate, UserLogin, UserRole, Token, CompanyCreate
-from app.auth import (
+
+from app.schemas.common_schema import UserRole, CompanyStatus, JobStatus, utc_now
+from app.schemas.user_schema import UserCreate
+from app.schemas.auth_schema import UserLogin, Token
+from app.schemas.company_schema import CompanyCreate
+from app.schemas.shared_schema import LocationDetail
+from app.schemas.common_schema import AuditAction
+from app.repositories.user_repository import UserRepository
+from app.repositories.company_repository import CompanyRepository
+from app.repositories.job_repository import JobRepository
+from app.repositories.refresh_token_repository import RefreshTokenRepository
+from app.repositories.applicant_profile_repository import ApplicantProfileRepository
+from app.services.audit_service import log_action
+
+from app.core.security import (
     CurrentUser,
     get_current_user,
     get_password_hash,
@@ -27,6 +39,7 @@ from pydantic import BaseModel, Field, field_validator
 import httpx
 from fastapi.security import OAuth2PasswordRequestForm
 import re
+import time
 
 # ---------------------------------------------------------------------
 # DTO đặc thù cho router này (không phải entity lưu DB nên KHÔNG đặt
@@ -52,10 +65,15 @@ class ProfileUpdate(BaseModel):
     full_name: Optional[str] = None
     avatar: Optional[str] = None
     phone: Optional[str] = None
-    address: Optional[str] = None
+    bio: Optional[str] = None
+    job_title_internal: Optional[str] = None
+    extension_phone: Optional[str] = None
+    current_location: Optional[LocationDetail] = None
     github: Optional[str] = None
     linkedin: Optional[str] = None
-    bio: Optional[str] = None
+    headline: Optional[str] = None
+    expected_salary_min: Optional[int] = None
+    expected_salary_max: Optional[int] = None
 
 class PasswordChange(BaseModel):
     current_password: str
@@ -108,7 +126,7 @@ def _make_avatar_url(full_name: str) -> str:
     encoded_name = urllib.parse.quote(full_name)
     return f"https://ui-avatars.com/api/?name={encoded_name}&background=random&color=fff&size=200"
 
-async def _create_company(db, req_data: BaseModel) -> str:
+async def _create_company(req_data: BaseModel) -> str:
     company_doc = CompanyCreate(
         name=req_data.company_name, 
         tax_code=req_data.tax_code,
@@ -120,8 +138,8 @@ async def _create_company(db, req_data: BaseModel) -> str:
     
     company_doc["status"] = CompanyStatus.PENDING_VERIFICATION.value
     company_doc["created_at"] = datetime.now(timezone.utc)
-    result = await db[Collections.COMPANIES].insert_one(company_doc)
-    return str(result.inserted_id)
+    
+    return await CompanyRepository.create(company_doc)
 
 # =====================================================================
 # ĐĂNG KÝ / XÁC THỰC EMAIL
@@ -130,15 +148,13 @@ async def _create_company(db, req_data: BaseModel) -> str:
 @router.post("/register", status_code=201)
 @limiter.limit("10/day")
 async def register_user(request: Request, response: Response, background_tasks: BackgroundTasks, payload: RegisterRequest = Body(...)):
-    db = get_db()
-
     if payload.invite_token:
         try:
             token_data = jwt.decode(payload.invite_token, JWT_SECRET, algorithms=[ALGORITHM])
             if token_data.get("email") != payload.email:
                 raise HTTPException(status_code=400, detail="Email đăng ký không khớp với email được mời!")
             
-            existing_user = await db[Collections.USERS].find_one({"email": payload.email})
+            existing_user = await UserRepository.get_by_email(payload.email)
             if existing_user:
                 raise HTTPException(status_code=400, detail="Email này đã được đăng ký trên hệ thống!")
                 
@@ -149,14 +165,22 @@ async def register_user(request: Request, response: Response, background_tasks: 
                 "email": payload.email,
                 "full_name": payload.full_name,
                 "hashed_password": hashed_pw,
-                "avatar": auto_avatar,
-                "original_avatar": auto_avatar,
+                "avatar_url": auto_avatar,
+                "original_avatar_url": auto_avatar,
                 "role": token_data.get("role", UserRole.HR_MEMBER.value),
                 "company_id": token_data.get("company_id"),
                 "is_verified": True,
                 "created_at": datetime.now(timezone.utc),
             }
-            await db[Collections.USERS].insert_one(new_user)
+            user_id = await UserRepository.create(new_user)
+            
+            if token_data.get("role") == UserRole.APPLICANT.value:
+                await ApplicantProfileRepository.create({
+                    "user_id": str(user_id),
+                    "created_at": datetime.now(timezone.utc),
+                    "deleted_at": None
+                })
+                
             return {"status": "success", "message": "Gia nhập công ty thành công! Bạn có thể đăng nhập ngay."}
         except jwt.PyJWTError:
             raise HTTPException(status_code=400, detail="Link mời không hợp lệ hoặc đã hết hạn.")
@@ -168,7 +192,7 @@ async def register_user(request: Request, response: Response, background_tasks: 
                    "Vai trò 'hr_member' cần được mời bởi hr_owner của công ty.",
         )
 
-    existing_user = await db[Collections.USERS].find_one({"email": payload.email})
+    existing_user = await UserRepository.get_by_email(payload.email)
     if existing_user:
         raise HTTPException(status_code=400, detail="Email này đã được đăng ký!")
 
@@ -179,7 +203,7 @@ async def register_user(request: Request, response: Response, background_tasks: 
                 status_code=400,
                 detail="company_name và tax_code là bắt buộc khi đăng ký với vai trò hr_owner.",
             )
-        company_id = await _create_company(db, payload)
+        company_id = await _create_company(payload)
 
     hashed_pw = get_password_hash(payload.password)
     auto_avatar = _make_avatar_url(payload.full_name)
@@ -188,18 +212,25 @@ async def register_user(request: Request, response: Response, background_tasks: 
         "email": payload.email,
         "full_name": payload.full_name,
         "hashed_password": hashed_pw,
-        "avatar": auto_avatar,
-        "original_avatar": auto_avatar,
+        "avatar_url": auto_avatar,
+        "original_avatar_url": auto_avatar,
         "role": payload.role.value,
         "company_id": company_id,
         "is_verified": False,
         "created_at": datetime.now(timezone.utc),
     }
 
-    insert_result = await db[Collections.USERS].insert_one(new_user)
+    user_id = await UserRepository.create(new_user)
+    
+    if payload.role == UserRole.APPLICANT:
+        await ApplicantProfileRepository.create({
+            "user_id": str(user_id),
+            "created_at": datetime.now(timezone.utc),
+            "deleted_at": None
+        })
 
     verify_token = jwt.encode(
-        {"sub": str(insert_result.inserted_id), "exp": datetime.now(timezone.utc) + timedelta(days=1)},
+        {"sub": str(user_id), "exp": datetime.now(timezone.utc) + timedelta(days=1)},
         JWT_SECRET, algorithm=ALGORITHM
     )
 
@@ -207,19 +238,12 @@ async def register_user(request: Request, response: Response, background_tasks: 
 
     return {"status": "success", "message": "Đăng ký thành công! Vui lòng kiểm tra email để kích hoạt tài khoản."}
 
-
 @router.get("/verify")
 async def verify_email(token: str):
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
-        user_id = payload.get("sub")
-        db = get_db()
-
-        result = await db[Collections.USERS].update_one(
-            {"_id": ObjectId(user_id)},
-            {"$set": {"is_verified": True}}
-        )
-        if result.modified_count == 0:
+        modified_count = await UserRepository.update(payload.get("sub"), {"is_verified": True})
+        if modified_count == 0:
             raise HTTPException(status_code=400, detail="Tài khoản không tồn tại hoặc đã được xác thực.")
 
         return {"message": "Xác thực thành công! Tài khoản của bạn đã được kích hoạt."}
@@ -233,9 +257,7 @@ async def verify_email(token: str):
 @router.post("/login", response_model=Token)
 @limiter.limit("5/minute")
 async def login_for_access_token(request: Request, response: Response, user_credentials: UserLogin = Body(...)):
-    db = get_db()
-
-    user = await db[Collections.USERS].find_one({"email": user_credentials.email})
+    user = await UserRepository.get_by_email(user_credentials.email)
 
     if not user or not verify_password(user_credentials.password, user["hashed_password"]):
         raise HTTPException(status_code=401, detail="Email hoặc mật khẩu không chính xác")
@@ -248,8 +270,7 @@ async def login_for_access_token(request: Request, response: Response, user_cred
 
 @router.post("/forgot-password")
 async def forgot_password(background_tasks: BackgroundTasks, email: str = Body(..., embed=True)):
-    db = get_db()
-    user = await db[Collections.USERS].find_one({"email": email})
+    user = await UserRepository.get_by_email(email)
 
     msg = "Nếu email tồn tại trên hệ thống, link khôi phục đã được gửi."
     if not user:
@@ -258,37 +279,27 @@ async def forgot_password(background_tasks: BackgroundTasks, email: str = Body(.
     reset_token = secrets.token_hex(32)
     hashed_token = hashlib.sha256(reset_token.encode()).hexdigest()
 
-    await db[Collections.USERS].update_one(
-        {"_id": user["_id"]},
-        {"$set": {
-            "reset_password_token": hashed_token,
-            "reset_password_expires": datetime.now(timezone.utc) + timedelta(minutes=15)
-        }}
-    )
+    await UserRepository.update(str(user["_id"]), {
+        "reset_password_token": hashed_token,
+        "reset_password_expires": datetime.now(timezone.utc) + timedelta(minutes=15)
+    })
 
     send_reset_password_email(background_tasks, user["email"], user["full_name"], reset_token)
     return {"message": msg}
 
 @router.post("/reset-password")
 async def reset_password(payload: ResetPasswordRequest):
-    db = get_db()
     hashed_token = hashlib.sha256(payload.token.encode()).hexdigest()
     
-    user = await db[Collections.USERS].find_one({
-        "reset_password_token": hashed_token,
-        "reset_password_expires": {"$gt": datetime.now(timezone.utc)}
-    })
+    user = await UserRepository.find_one({"reset_password_token": hashed_token, "reset_password_expires": {"$gt": datetime.now(timezone.utc)}})
     
     if not user:
         raise HTTPException(status_code=400, detail="Link khôi phục không hợp lệ hoặc đã hết hạn!")
 
     hashed_pw = get_password_hash(payload.new_password)
-    await db[Collections.USERS].update_one(
+    await UserRepository.update_custom(
         {"_id": user["_id"]},
-        {
-            "$set": {"hashed_password": hashed_pw},
-            "$unset": {"reset_password_token": "", "reset_password_expires": ""}
-        }
+        {"$set": {"hashed_password": hashed_pw}, "$unset": {"reset_password_token": "", "reset_password_expires": ""}}
     )
 
     return {"message": "Mật khẩu đã được đặt lại thành công! Bạn có thể đăng nhập."}
@@ -313,66 +324,97 @@ async def google_login(request: Request, response: Response, social_request: Soc
         full_name = idinfo.get('name', 'Người dùng Google')
         picture = idinfo.get('picture', '')
 
-        db = get_db()
-        user = await db[Collections.USERS].find_one({"email": email})
+        user = await UserRepository.get_by_email(email)
 
         if not user:
-            if not social_request.role:
-                return JSONResponse(
-                    status_code=202,
-                    content={
-                        "action": "require_role",
-                        "message": "Vui lòng chọn vai trò để hoàn tất",
-                        "email": email
-                    }
-                )
-
-            if social_request.role not in SELF_REGISTERABLE_ROLES:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Chỉ có thể đăng ký với vai trò 'applicant' hoặc 'hr_owner' qua Google.",
-                )
-
             company_id = None
-            if social_request.role == UserRole.HR_OWNER:
-                if not social_request.company_name or not social_request.tax_code:
+            assigned_role = social_request.role
+
+            if social_request.invite_token:
+                try:
+                    token_data = jwt.decode(social_request.invite_token, JWT_SECRET, algorithms=[ALGORITHM])
+                    if token_data.get("email") != email:
+                        raise HTTPException(status_code=400, detail="Email từ Google không khớp với email được mời!")
+                    assigned_role = token_data.get("role", UserRole.HR_MEMBER.value)
+                    company_id = token_data.get("company_id")
+                except jwt.PyJWTError:
+                    raise HTTPException(status_code=400, detail="Link mời không hợp lệ hoặc đã hết hạn.")
+            else:
+                if not assigned_role:
+                    return JSONResponse(
+                        status_code=202,
+                        content={
+                            "action": "require_role",
+                            "message": "Vui lòng chọn vai trò để hoàn tất",
+                            "email": email
+                        }
+                    )
+
+                if assigned_role not in SELF_REGISTERABLE_ROLES:
                     raise HTTPException(
                         status_code=400,
-                        detail="company_name và tax_code là bắt buộc khi đăng ký với vai trò hr_owner.",
+                        detail="Chỉ có thể đăng ký với vai trò 'applicant' hoặc 'hr_owner' qua Google.",
                     )
-                company_id = await _create_company(db, social_request)
+
+                if assigned_role == UserRole.HR_OWNER:
+                    if not social_request.company_name or not social_request.tax_code:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="company_name và tax_code là bắt buộc khi đăng ký với vai trò hr_owner.",
+                        )
+                    company_id = await _create_company(social_request)
 
             random_pw = secrets.token_urlsafe(32)
             hashed_pw = get_password_hash(random_pw)
             final_avatar = picture if picture else _make_avatar_url(full_name)
+            
+            role_val = assigned_role.value if hasattr(assigned_role, 'value') else assigned_role
 
             new_user = {
                 "email": email,
                 "full_name": full_name,
                 "hashed_password": hashed_pw,
-                "avatar": final_avatar,
-                "original_avatar": final_avatar,
-                "role": social_request.role.value,
+                "avatar_url": final_avatar,
+                "original_avatar_url": final_avatar,
+                "role": role_val,
                 "company_id": company_id,
                 "is_verified": True,
                 "created_at": datetime.now(timezone.utc)
             }
-            insert_result = await db[Collections.USERS].insert_one(new_user)
-            user = await db[Collections.USERS].find_one({"_id": insert_result.inserted_id})
+            user_id = await UserRepository.create(new_user)
+            
+            if role_val == UserRole.APPLICANT.value or role_val == UserRole.APPLICANT:
+                await ApplicantProfileRepository.create({
+                    "user_id": str(user_id),
+                    "created_at": datetime.now(timezone.utc),
+                    "deleted_at": None
+                })
+                
+            user = await UserRepository.get_by_id(user_id)
 
         else:
             update_fields = {}
+            
+            if social_request.invite_token:
+                try:
+                    token_data = jwt.decode(social_request.invite_token, JWT_SECRET, algorithms=[ALGORITHM])
+                    if token_data.get("email") == email:
+                        update_fields["role"] = token_data.get("role", UserRole.HR_MEMBER.value)
+                        update_fields["company_id"] = token_data.get("company_id")
+                except jwt.PyJWTError:
+                    pass
+
             if not user.get("is_verified", False):
                 update_fields["is_verified"] = True
 
-            current_avatar = user.get("avatar", "")
+            current_avatar = user.get("avatar_url", "")
             if picture and "ui-avatars.com" in current_avatar:
-                update_fields["avatar"] = picture
-                update_fields["original_avatar"] = picture
+                update_fields["avatar_url"] = picture
+                update_fields["original_avatar_url"] = picture
 
             if update_fields:
                 update_fields["updated_at"] = datetime.now(timezone.utc)
-                await db[Collections.USERS].update_one({"_id": user["_id"]}, {"$set": update_fields})
+                await UserRepository.update(str(user["_id"]), update_fields)
                 user.update(update_fields)
 
         access_token = create_access_token(build_token_payload(user))
@@ -390,10 +432,6 @@ LINKEDIN_CLIENT_SECRET = os.getenv("LINKEDIN_CLIENT_SECRET", "")
 
 
 async def _exchange_linkedin_code(code: str, redirect_uri: str) -> str:
-    """
-    Đổi authorization code lấy access_token thật từ LinkedIn.
-    Bắt buộc thực hiện ở server vì cần client_secret.
-    """
     async with httpx.AsyncClient() as client:
         token_res = await client.post(
             "https://www.linkedin.com/oauth/v2/accessToken",
@@ -417,12 +455,10 @@ async def _exchange_linkedin_code(code: str, redirect_uri: str) -> str:
 
     return access_token
 
-
 @router.post("/linkedin")
 @limiter.limit("10/minute")
 async def linkedin_login(request: Request, response: Response, social_request: SocialAuthRequest = Body(...)):
     try:
-        # Bước 1: đổi code (nhận từ frontend) lấy access_token thật
         if not social_request.code or not social_request.redirect_uri:
             raise HTTPException(
                 status_code=400,
@@ -433,7 +469,6 @@ async def linkedin_login(request: Request, response: Response, social_request: S
             social_request.code, social_request.redirect_uri
         )
 
-        # Bước 2: dùng access_token thật để lấy userinfo
         async with httpx.AsyncClient() as client:
             res = await client.get(
                 "https://api.linkedin.com/v2/userinfo",
@@ -447,66 +482,96 @@ async def linkedin_login(request: Request, response: Response, social_request: S
         full_name = idinfo.get('name', 'Người dùng LinkedIn')
         picture = idinfo.get('picture', '')
 
-        db = get_db()
-        user = await db[Collections.USERS].find_one({"email": email})
+        user = await UserRepository.get_by_email(email)
 
         if not user:
-            if not social_request.role:
-                return JSONResponse(
-                    status_code=202,
-                    content={
-                        "action": "require_role",
-                        "message": "Vui lòng chọn vai trò để hoàn tất",
-                        "email": email
-                    }
-                )
-
-            if social_request.role not in SELF_REGISTERABLE_ROLES:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Chỉ có thể đăng ký với vai trò 'applicant' hoặc 'hr_owner' qua LinkedIn.",
-                )
-
             company_id = None
-            if social_request.role == UserRole.HR_OWNER:
-                if not social_request.company_name or not social_request.tax_code:
+            assigned_role = social_request.role
+
+            if social_request.invite_token:
+                try:
+                    token_data = jwt.decode(social_request.invite_token, JWT_SECRET, algorithms=[ALGORITHM])
+                    if token_data.get("email") != email:
+                        raise HTTPException(status_code=400, detail="Email từ LinkedIn không khớp với email được mời!")
+                    assigned_role = token_data.get("role", UserRole.HR_MEMBER.value)
+                    company_id = token_data.get("company_id")
+                except jwt.PyJWTError:
+                    raise HTTPException(status_code=400, detail="Link mời không hợp lệ hoặc đã hết hạn.")
+            else:
+                if not assigned_role:
+                    return JSONResponse(
+                        status_code=202,
+                        content={
+                            "action": "require_role",
+                            "message": "Vui lòng chọn vai trò để hoàn tất",
+                            "email": email
+                        }
+                    )
+
+                if assigned_role not in SELF_REGISTERABLE_ROLES:
                     raise HTTPException(
                         status_code=400,
-                        detail="company_name và tax_code là bắt buộc khi đăng ký với vai trò hr_owner.",
+                        detail="Chỉ có thể đăng ký với vai trò 'applicant' hoặc 'hr_owner' qua LinkedIn.",
                     )
-                company_id = await _create_company(db, social_request)
+
+                if assigned_role == UserRole.HR_OWNER:
+                    if not social_request.company_name or not social_request.tax_code:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="company_name và tax_code là bắt buộc khi đăng ký với vai trò hr_owner.",
+                        )
+                    company_id = await _create_company(social_request)
 
             random_pw = secrets.token_urlsafe(32)
             hashed_pw = get_password_hash(random_pw)
             final_avatar = picture if picture else _make_avatar_url(full_name)
+            
+            role_val = assigned_role.value if hasattr(assigned_role, 'value') else assigned_role
 
             new_user = {
                 "email": email,
                 "full_name": full_name,
                 "hashed_password": hashed_pw,
-                "avatar": final_avatar,
-                "original_avatar": final_avatar,
-                "role": social_request.role.value,
+                "avatar_url": final_avatar,
+                "original_avatar_url": final_avatar,
+                "role": role_val,
                 "company_id": company_id,
                 "is_verified": True,
                 "created_at": datetime.now(timezone.utc)
             }
-            insert_result = await db[Collections.USERS].insert_one(new_user)
-            user = await db[Collections.USERS].find_one({"_id": insert_result.inserted_id})
+            user_id = await UserRepository.create(new_user)
+            
+            if role_val == UserRole.APPLICANT.value or role_val == UserRole.APPLICANT:
+                await ApplicantProfileRepository.create({
+                    "user_id": str(user_id),
+                    "created_at": datetime.now(timezone.utc),
+                    "deleted_at": None
+                })
+                
+            user = await UserRepository.get_by_id(user_id)
 
         else:
             update_fields = {}
+            if social_request.invite_token:
+                try:
+                    token_data = jwt.decode(social_request.invite_token, JWT_SECRET, algorithms=[ALGORITHM])
+                    if token_data.get("email") == email:
+                        update_fields["role"] = token_data.get("role", UserRole.HR_MEMBER.value)
+                        update_fields["company_id"] = token_data.get("company_id")
+                except jwt.PyJWTError:
+                    pass
+
             if not user.get("is_verified", False):
                 update_fields["is_verified"] = True
 
-            current_avatar = user.get("avatar", "")
+            current_avatar = user.get("avatar_url", "")
             if picture and "ui-avatars.com" in current_avatar:
-                update_fields["avatar"] = picture
-                update_fields["original_avatar"] = picture
+                update_fields["avatar_url"] = picture
+                update_fields["original_avatar_url"] = picture
 
             if update_fields:
                 update_fields["updated_at"] = datetime.now(timezone.utc)
-                await db[Collections.USERS].update_one({"_id": user["_id"]}, {"$set": update_fields})
+                await UserRepository.update(str(user["_id"]), update_fields)
                 user.update(update_fields)
 
         access_token_jwt = create_access_token(build_token_payload(user))
@@ -521,64 +586,80 @@ async def linkedin_login(request: Request, response: Response, social_request: S
 
 @router.get("/profile")
 async def get_profile(current_user: CurrentUser = Depends(get_current_user)):
-    db = get_db()
-    user = await db[Collections.USERS].find_one({"_id": ObjectId(current_user.id)})
+    user = await UserRepository.get_by_id(current_user.id)
 
     if not user:
         raise HTTPException(status_code=404, detail="Không tìm thấy thông tin người dùng")
 
-    profile = user.get("profile", {}) or {}
+    profile = {}
+    if user.get("role") == UserRole.APPLICANT.value:
+        profile = await ApplicantProfileRepository.get_by_user_id(current_user.id) or {}
+
     return {
         "id": current_user.id,
         "email": user["email"],
         "full_name": user.get("full_name", ""),
-        "phone": profile.get("phone", ""),
-        "address": profile.get("address", ""),
+        "phone": user.get("phone", ""),
+        "bio": user.get("bio", ""),
+        "job_title_internal": user.get("job_title_internal", ""),
+        "extension_phone": user.get("extension_phone", ""),
+        "current_location": profile.get("current_location", {}),
         "github": profile.get("github", ""),
         "linkedin": profile.get("linkedin", ""),
-        "bio": profile.get("bio", ""),
-        "avatar": user.get("avatar", ""),
+        "headline": profile.get("headline", ""),
+        "expected_salary_min": profile.get("expected_salary_min"),
+        "expected_salary_max": profile.get("expected_salary_max"),
+        "avatar_url": user.get("avatar_url", ""),
         "role": user.get("role"),
         "company_id": user.get("company_id"),
     }
 
-
 @router.patch("/profile")
 async def update_profile(profile_data: ProfileUpdate, current_user: CurrentUser = Depends(get_current_user)):
-    db = get_db()
-
-    update_data = {}
-    if profile_data.full_name is not None:
-        update_data["full_name"] = profile_data.full_name
-    if profile_data.avatar is not None:
-        update_data["avatar"] = profile_data.avatar
-
-    for field in ("phone", "address", "github", "linkedin", "bio"):
-        value = getattr(profile_data, field)
-        if value is not None:
-            update_data[f"profile.{field}"] = value
-
-    if not update_data:
-        return {"status": "success", "message": "Không có thay đổi nào để cập nhật"}
-
-    update_data["updated_at"] = datetime.now(timezone.utc)
-
-    result = await db[Collections.USERS].update_one(
-        {"_id": ObjectId(current_user.id)},
-        {"$set": update_data}
-    )
-
-    if result.matched_count == 0:
+    user = await UserRepository.get_by_id(current_user.id)
+    if not user:
         raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+
+    user_update = {}
+    for field in ("full_name", "phone", "bio", "job_title_internal", "extension_phone"):
+        value = getattr(profile_data, field, None)
+        if value is not None:
+            user_update[field] = value
+
+    if profile_data.avatar is not None:
+        user_update["avatar_url"] = profile_data.avatar
+
+    if user_update:
+        user_update["updated_at"] = datetime.now(timezone.utc)
+        await UserRepository.update(current_user.id, user_update)
+
+    if user.get("role") == UserRole.APPLICANT.value:
+        profile_update = {}
+        for field in ("github", "linkedin", "headline", "expected_salary_min", "expected_salary_max"):
+            value = getattr(profile_data, field, None)
+            if value is not None:
+                profile_update[field] = value
+                
+        if profile_data.current_location is not None:
+            profile_update["current_location"] = profile_data.current_location.model_dump(exclude_unset=True)
+
+        if profile_update:
+            profile_update["updated_at"] = datetime.now(timezone.utc)
+            existing_profile = await ApplicantProfileRepository.get_by_user_id(current_user.id)
+            
+            if existing_profile:
+                await ApplicantProfileRepository.update(str(existing_profile["_id"]), profile_update)
+            else:
+                profile_update["user_id"] = current_user.id
+                profile_update["created_at"] = datetime.now(timezone.utc)
+                profile_update["deleted_at"] = None
+                await ApplicantProfileRepository.create(profile_update)
 
     return {"status": "success", "message": "Cập nhật thông tin thành công"}
 
-
 @router.patch("/change-password")
 async def change_password(password_data: PasswordChange, current_user: CurrentUser = Depends(get_current_user)):
-    db = get_db()
-
-    user = await db[Collections.USERS].find_one({"_id": ObjectId(current_user.id)})
+    user = await UserRepository.get_by_id(current_user.id)
     if not user:
         raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
 
@@ -587,21 +668,16 @@ async def change_password(password_data: PasswordChange, current_user: CurrentUs
 
     new_hashed_password = get_password_hash(password_data.new_password)
 
-    await db[Collections.USERS].update_one(
-        {"_id": ObjectId(current_user.id)},
-        {"$set": {
-            "hashed_password": new_hashed_password,
-            "updated_at": datetime.now(timezone.utc)
-        }}
-    )
+    await UserRepository.update(current_user.id, {
+        "hashed_password": new_hashed_password,
+        "updated_at": datetime.now(timezone.utc)
+    })
 
     return {"status": "success", "message": "Đổi mật khẩu thành công"}
 
-
 @router.get("/me")
 async def get_current_user_profile(current_user: CurrentUser = Depends(get_current_user)):
-    db = get_db()
-    user = await db[Collections.USERS].find_one({"_id": ObjectId(current_user.id)})
+    user = await UserRepository.get_by_id(current_user.id)
 
     if not user:
         raise HTTPException(status_code=404, detail="Không tìm thấy thông tin người dùng")
@@ -610,17 +686,14 @@ async def get_current_user_profile(current_user: CurrentUser = Depends(get_curre
         "id": current_user.id,
         "email": user["email"],
         "full_name": user.get("full_name", "User"),
-        "avatar": user.get("avatar", ""),
+        "avatar_url": user.get("avatar_url", ""),
         "role": user.get("role"),
         "company_id": user.get("company_id"),
     }
 
-
 @router.post("/docs-login", response_model=Token, include_in_schema=False)
 async def swagger_login(form_data: OAuth2PasswordRequestForm = Depends()):
-    db = get_db()
-
-    user = await db[Collections.USERS].find_one({"email": form_data.username})
+    user = await UserRepository.get_by_email(form_data.username)
 
     if not user or not verify_password(form_data.password, user["hashed_password"]):
         raise HTTPException(status_code=401, detail="Email hoặc mật khẩu không chính xác")
@@ -630,3 +703,90 @@ async def swagger_login(form_data: OAuth2PasswordRequestForm = Depends()):
 
     access_token = create_access_token(build_token_payload(user))
     return {"access_token": access_token, "token_type": "bearer"}
+
+@router.delete("/me/anonymize", status_code=200, tags=["Profile"])
+async def anonymize_account(current_user: CurrentUser = Depends(get_current_user)):
+    user = await UserRepository.get_by_id(current_user.id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+
+    # ==========================================
+    # EDGE CASE: XỬ LÝ NHƯỢNG QUYỀN HR_OWNER
+    # ==========================================
+    if user.get("role") == UserRole.HR_OWNER.value and user.get("company_id"):
+        company = await CompanyRepository.get_by_id(user["company_id"])
+        
+        if company and company.get("owner_user_id") == current_user.id:
+            hr_count = await UserRepository.count_documents({
+                "company_id": user["company_id"],
+                "role": {"$in": [UserRole.HR_OWNER.value, UserRole.HR_MEMBER.value]}
+            })
+            
+            if hr_count > 1:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Công ty đang có thành viên khác. Bạn phải chuyển quyền Owner trước khi xóa tài khoản."
+                )
+            else:
+                await CompanyRepository.update(
+                    user["company_id"], 
+                    {
+                        "status": CompanyStatus.SUSPENDED.value, 
+                        "deleted_at": utc_now()
+                    }
+                )
+                await JobRepository.update_many(
+                    {"company_id": user["company_id"], "status": JobStatus.OPEN.value},
+                    {"status": JobStatus.CLOSED.value}
+                )
+
+    # ==========================================
+    # KỸ THUẬT ANONYMIZATION
+    # ==========================================
+    timestamp = int(time.time())
+    anonymized_email = f"deleted_{timestamp}_{current_user.id}@anonymized.local"
+    
+    random_pw = get_password_hash(secrets.token_urlsafe(32)) 
+    
+    update_data = {
+        "email": anonymized_email,
+        "hashed_password": random_pw,
+        "full_name": "Người dùng đã xóa",
+        "avatar_url": "",
+        "original_avatar_url": "",
+        "is_active": False,
+        "deleted_at": utc_now(),
+    }
+    
+    unset_data = {
+        "phone": "",
+        "bio": "",
+        "github": "",
+        "linkedin": "",
+        "job_title_internal": "",
+        "extension_phone": ""
+    }
+
+    await UserRepository.update_custom(
+        {"_id": ObjectId(current_user.id)},
+        {"$set": update_data, "$unset": unset_data}
+    )
+    
+    if user.get("role") == UserRole.APPLICANT.value:
+        await ApplicantProfileRepository.update_custom(
+            {"user_id": current_user.id},
+            {"$set": {"deleted_at": utc_now()}, "$unset": {"phone": "", "address": "", "bio": "", "github": "", "linkedin": ""}}
+        )
+    
+    await RefreshTokenRepository.delete_many({"user_id": current_user.id})
+
+    await log_action(
+        actor_id=current_user.id,
+        actor_role=user.get("role"),
+        action=AuditAction.USER_ANONYMIZED,
+        target_type="user",
+        target_id=current_user.id,
+        note="Người dùng chủ động xóa và ẩn danh tài khoản vĩnh viễn"
+    )
+
+    return {"status": "success", "message": "Tài khoản của bạn đã được xóa và ẩn danh vĩnh viễn."}

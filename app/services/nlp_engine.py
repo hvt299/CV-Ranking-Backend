@@ -1,7 +1,5 @@
-import os
 import io
 import re
-import csv
 from typing import Dict, List, Tuple
 import logging
 from datetime import datetime
@@ -15,73 +13,45 @@ from fastapi.concurrency import run_in_threadpool
 from app.services.vector_engine import calculate_cosine_similarity
 from app.services.llm_service import extract_cv_metrics_with_llm
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SKILLS_FOLDER = os.path.join(BASE_DIR, "data")
+from app.repositories.skill_repository import SkillRepository
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-logging.getLogger("pdfminer").setLevel(logging.ERROR)
+INDUSTRY_SKILL_MAP = {}
 
-def load_skills(file_path: str) -> Dict[str, List[str]]:
-    skill_map = {}
-    try:
-        with open(file_path, encoding="utf-8") as f:
-            reader = csv.reader(f)
-            next(reader, None)
-            for row in reader:
-                if not row or len(row) < 3:
-                    continue
-                main = row[2].strip().lower()
-                variants = set([main] + [v.strip().lower() for v in row[3:] if v.strip()])
-                skill_map[main] = list(variants)
-    except Exception as e:
-        logger.error(f"Lỗi tải file {file_path}: {e}")
-    return skill_map
+async def initialize_skill_map():
+    """Hàm này sẽ được gọi ở lifespan trong main.py khi khởi động server"""
+    global INDUSTRY_SKILL_MAP
+    INDUSTRY_SKILL_MAP.clear()
 
-def load_all_skills_by_industry() -> Dict[str, Dict[str, List[str]]]:
-    industry_skill_map = {}
+    # Lấy toàn bộ skill từ DB (limit=0 để không bị giới hạn) - Dùng thẳng ClassMethod
+    skills = await SkillRepository.find_many(limit=0)
 
-    if not os.path.exists(SKILLS_FOLDER):
-        logger.warning(f"Không tìm thấy thư mục {SKILLS_FOLDER}")
-        return industry_skill_map
-
-    for industry_folder in os.listdir(SKILLS_FOLDER):
-        industry_path = os.path.join(SKILLS_FOLDER, industry_folder)
+    merged_map = {}
+    for doc in skills:
+        ind = doc.get("industry", "other").lower()
+        main = doc.get("canonical_name", "").lower()
+        aliases = doc.get("aliases", [])
         
-        if os.path.isdir(industry_path):
-            merged_skill_map = {}
-            for filename in os.listdir(industry_path):
-                if not filename.endswith(".csv"):
-                    continue
-
-                file_path = os.path.join(industry_path, filename)
-                skill_map = load_skills(file_path)
-
-                for main, variants in skill_map.items():
-                    if main not in merged_skill_map:
-                        merged_skill_map[main] = variants
-                    else:
-                        merged_skill_map[main] = list(
-                            set(merged_skill_map[main]) | set(variants)
-                        )
+        if ind not in merged_map:
+            merged_map[ind] = {}
             
-            industry_skill_map[industry_folder] = merged_skill_map
-            logger.info(f"Đã tải {len(merged_skill_map)} kỹ năng cho ngành '{industry_folder}'")
-
+        merged_map[ind][main] = list(set([main] + [a.lower() for a in aliases]))
+        
+    # Xây dựng bộ từ điển tổng hợp (fallback)
     all_skills = {}
-    for skills in industry_skill_map.values():
-        for main, variants in skills.items():
+    for ind, skill_dict in merged_map.items():
+        for main, variants in skill_dict.items():
             if main not in all_skills:
                 all_skills[main] = variants
             else:
                 all_skills[main] = list(set(all_skills[main]) | set(variants))
                 
-    industry_skill_map["all"] = all_skills
-    logger.info(f"Tổng cộng đã tải {len(all_skills)} kỹ năng vào bộ từ điển chung (fallback).")
-    
-    return industry_skill_map
+    merged_map["all"] = all_skills
+    INDUSTRY_SKILL_MAP = merged_map
+    logger.info(f"AI Engine: Đã tải {len(all_skills)} kỹ năng vào Cache từ MongoDB.")
 
-INDUSTRY_SKILL_MAP = load_all_skills_by_industry()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
 
 def get_smart_skill_pattern(skill: str) -> str:
     escaped = re.escape(skill)
