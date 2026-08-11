@@ -4,17 +4,16 @@ from pydantic import BaseModel
 from bson import ObjectId
 from datetime import datetime, timezone
 
-from app.auth import get_current_user, CurrentUser
-from app.database.config import get_db, Collections
-from app.database.models import (
-    UserRole, 
-    JobStatus, 
-    ApplicationStatus, 
-    ApplicationSource, 
-    NotificationReadStatus
-)
+from app.core.security import get_current_user, CurrentUser
+from app.database.config import Collections
+from app.schemas.common_schema import UserRole, JobStatus, ApplicationStatus, ApplicationSource, NotificationReadStatus
+from app.repositories.job_repository import JobRepository
+from app.repositories.application_repository import ApplicationRepository
+from app.repositories.cv_repository import CVRepository
+from app.repositories.notification_repository import NotificationRepository
+
 from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
-from app.services.vector_engine import compress_cv_data, get_embedding, get_cv_embeddings, get_top_contributing_sentences
+from app.services.vector_engine import compress_cv_data, get_cv_embeddings, get_top_contributing_sentences
 from app.services.document_forensics import detect_hidden_text
 from app.middleware.rate_limit import limiter
 from app.services.storage_service import upload_file_to_cloudinary, delete_file_from_cloudinary
@@ -31,9 +30,26 @@ async def require_applicant(current_user: CurrentUser = Depends(get_current_user
         )
     return current_user
 
+def _prepare_cv_for_scoring(cv_doc: dict, job: dict) -> dict:
+    """Helper function giúp dọn dẹp nợ kỹ thuật (Lặp code) khi format CV payload cho AI"""
+    raw_text = cv_doc.get("raw_text", "")
+    top_sentences = get_top_contributing_sentences(raw_text, job.get("jd_search_text", ""))
+    return {
+        "raw_text": raw_text,
+        "word_count": len((raw_text or "").split()),
+        "skills": cv_doc.get("extracted_skills", []),
+        "years_of_experience": cv_doc.get("candidate_info", {}).get("years_of_experience", 0),
+        "skill_experience": cv_doc.get("candidate_info", {}).get("skill_experience", {}),
+        "education_level": cv_doc.get("candidate_info", {}).get("education_level", "Không đề cập"),
+        "job_hops": cv_doc.get("candidate_info", {}).get("job_hops", 1),
+        "gap_months": cv_doc.get("candidate_info", {}).get("gap_months", 0),
+        "cv_vector": cv_doc.get("cv_vector_ref", []),
+        "fraud_analysis": cv_doc.get("candidate_info", {}).get("fraud_analysis", {}),
+        "top_sentences": top_sentences
+    }
+
 @router.get("/jobs")
 async def list_open_jobs():
-    db = get_db()
     pipeline = [
         {"$match": {"status": JobStatus.OPEN.value}},
         {"$sort": {"created_at": -1}},
@@ -57,7 +73,7 @@ async def list_open_jobs():
         }
     ]
     
-    jobs = await db[Collections.JOBS].aggregate(pipeline).to_list(length=100)
+    jobs = await JobRepository.aggregate_jobs(pipeline)
     
     result = []
     for job in jobs:
@@ -99,8 +115,6 @@ async def list_open_jobs():
 
 @router.get("/my-applications")
 async def my_applications(current_applicant: CurrentUser = Depends(require_applicant)):
-    db = get_db()
-    
     pipeline = [
         {"$match": {"applicant_user_id": current_applicant.id}},
         {"$sort": {"applied_at": -1}},
@@ -136,7 +150,7 @@ async def my_applications(current_applicant: CurrentUser = Depends(require_appli
         {"$unwind": {"path": "$company_info", "preserveNullAndEmptyArrays": True}}
     ]
     
-    apps = await db[Collections.APPLICATIONS].aggregate(pipeline).to_list(length=100)
+    apps = await ApplicationRepository.aggregate_applications(pipeline)
     
     result = []
     for a in apps:
@@ -155,12 +169,7 @@ async def my_applications(current_applicant: CurrentUser = Depends(require_appli
 
 @router.get("/notifications")
 async def get_notifications(current_applicant: CurrentUser = Depends(require_applicant)):
-    db = get_db()
-    cursor = db[Collections.NOTIFICATIONS].find(
-        {"recipient_user_id": current_applicant.id}
-    ).sort("created_at", -1)
-    
-    notifications = await cursor.to_list(length=100)
+    notifications = await NotificationRepository.find_all({"recipient_user_id": current_applicant.id}, limit=100)
     for notification in notifications:
         notification["id"] = str(notification["_id"])
         del notification["_id"]
@@ -172,22 +181,13 @@ async def mark_notification_read(
     notification_id: str,
     current_applicant: CurrentUser = Depends(require_applicant)
 ):
-    db = get_db()
     try:
-        result = await db[Collections.NOTIFICATIONS].update_one(
-            {
-                "_id": ObjectId(notification_id),
-                "recipient_user_id": current_applicant.id
-            },
-            {
-                "$set": {
-                    "status": NotificationReadStatus.READ.value, 
-                    "read_at": datetime.now(timezone.utc)
-                }
-            }
+        modified_count = await NotificationRepository.update(
+            notif_id=notification_id, 
+            recipient_user_id=current_applicant.id, 
+            update_data={"status": NotificationReadStatus.READ.value, "read_at": datetime.now(timezone.utc)}
         )
-        
-        if result.matched_count == 0:
+        if modified_count == 0:
             raise HTTPException(status_code=404, detail="Không tìm thấy thông báo")
             
         return {"status": "success", "message": "Đã đánh dấu thông báo là đã đọc"}
@@ -196,24 +196,14 @@ async def mark_notification_read(
 
 @router.patch("/notifications/read-all")
 async def mark_all_notifications_read(current_applicant: CurrentUser = Depends(require_applicant)):
-    db = get_db()
-    
-    result = await db[Collections.NOTIFICATIONS].update_many(
-        {
-            "recipient_user_id": current_applicant.id,
-            "status": NotificationReadStatus.UNREAD.value
-        },
-        {
-            "$set": {
-                "status": NotificationReadStatus.READ.value, 
-                "read_at": datetime.now(timezone.utc)
-            }
-        }
+    modified_count = await NotificationRepository.update_many(
+        {"recipient_user_id": current_applicant.id, "status": NotificationReadStatus.UNREAD.value},
+        {"status": NotificationReadStatus.READ.value, "read_at": datetime.now(timezone.utc)}
     )
     
     return {
         "status": "success", 
-        "message": f"Đã đánh dấu {result.modified_count} thông báo là đã đọc"
+        "message": f"Đã đánh dấu {modified_count} thông báo là đã đọc"
     }
 
 @router.delete("/notifications/{notification_id}")
@@ -221,16 +211,9 @@ async def delete_notification(
     notification_id: str,
     current_applicant: CurrentUser = Depends(require_applicant)
 ):
-    db = get_db()
     try:
-        result = await db[Collections.NOTIFICATIONS].delete_one(
-            {
-                "_id": ObjectId(notification_id),
-                "recipient_user_id": current_applicant.id
-            }
-        )
-        
-        if result.deleted_count == 0:
+        deleted_count = await NotificationRepository.delete(notif_id=notification_id, recipient_user_id=current_applicant.id)
+        if deleted_count == 0:
             raise HTTPException(status_code=404, detail="Không tìm thấy thông báo")
             
         return {"status": "success", "message": "Đã xóa thông báo"}
@@ -254,7 +237,6 @@ async def upload_cv_to_library(
     display_name: str = Form("CV Của Tôi"),
     current_applicant: CurrentUser = Depends(require_applicant)
 ):
-    db = get_db()
     content = await file.read()
     
     if len(content) > MAX_FILE_SIZE:
@@ -295,10 +277,10 @@ async def upload_cv_to_library(
         "created_at": datetime.now(timezone.utc)
     }
     
-    result = await db[Collections.CVS].insert_one(cv_doc)
+    cv_id = await CVRepository.create(cv_doc)
     return {
         "status": "success",
-        "cv_document_id": str(result.inserted_id),
+        "cv_document_id": str(cv_id),
         "file_url": file_url,
         "filename": file.filename
     }
@@ -312,36 +294,20 @@ async def apply_to_job(
     payload: ApplyJobRequest,
     current_applicant: CurrentUser = Depends(require_applicant)
 ):
-    db = get_db()
-    
-    job = await db[Collections.JOBS].find_one({"_id": ObjectId(job_id), "status": JobStatus.OPEN.value})
+    job = await JobRepository.find_one({"_id": ObjectId(job_id), "status": JobStatus.OPEN.value})
     if not job:
         raise HTTPException(status_code=404, detail="Không tìm thấy vị trí tuyển dụng hoặc đã đóng")
         
-    if await db[Collections.APPLICATIONS].find_one({"applicant_user_id": current_applicant.id, "job_id": job_id}):
+    if await ApplicationRepository.find_one({"applicant_user_id": current_applicant.id, "job_id": job_id}):
         raise HTTPException(status_code=400, detail="Bạn đã nộp hồ sơ cho vị trí này rồi!")
 
-    cv_doc = await db[Collections.CVS].find_one({"_id": ObjectId(payload.cv_document_id), "owner_user_id": current_applicant.id})
+    cv_doc = await CVRepository.find_one({"_id": ObjectId(payload.cv_document_id), "owner_user_id": current_applicant.id})
     if not cv_doc:
         raise HTTPException(status_code=404, detail="Không tìm thấy CV trong thư viện cá nhân")
 
-    raw_text = cv_doc.get("raw_text", "")
-    top_sentences = get_top_contributing_sentences(raw_text, job.get("jd_search_text", ""))
-    cover_letter=payload.cover_letter
-
-    scoring_result = score_cv({
-        "raw_text": raw_text,
-        "word_count": len((raw_text or "").split()),
-        "skills": cv_doc.get("extracted_skills", []),
-        "years_of_experience": cv_doc.get("candidate_info", {}).get("years_of_experience", 0),
-        "skill_experience": cv_doc.get("candidate_info", {}).get("skill_experience", {}),
-        "education_level": cv_doc.get("candidate_info", {}).get("education_level", "Không đề cập"),
-        "job_hops": cv_doc.get("candidate_info", {}).get("job_hops", 1),
-        "gap_months": cv_doc.get("candidate_info", {}).get("gap_months", 0),
-        "cv_vector": cv_doc.get("cv_vector_ref", []),
-        "fraud_analysis": cv_doc.get("candidate_info", {}).get("fraud_analysis", {}),
-        "top_sentences": top_sentences
-    }, job)
+    # Sử dụng Helper Function để tái cấu trúc
+    cv_data_for_scoring = _prepare_cv_for_scoring(cv_doc, job)
+    scoring_result = score_cv(cv_data_for_scoring, job)
 
     cv_snapshot = {
         "cv_document_id": str(cv_doc["_id"]),
@@ -361,21 +327,19 @@ async def apply_to_job(
         "status": ApplicationStatus.NEW.value,
         "ai_score": scoring_result,
         "applied_at": datetime.now(timezone.utc),
-        "cover_letter": cover_letter
+        "cover_letter": payload.cover_letter
     }
-    await db[Collections.APPLICATIONS].insert_one(app_record)
+    await ApplicationRepository.create(app_record)
 
     return {"status": "success", "message": "Nộp hồ sơ thành công bằng CV từ thư viện!"}
 
 @router.get("/library")
 async def get_my_cv_library(current_applicant: CurrentUser = Depends(require_applicant)):
-    db = get_db()
-    cursor = db[Collections.CVS].find(
+    cvs = await CVRepository.find_all(
         {"owner_user_id": current_applicant.id}, 
-        {"raw_text": 0, "cv_vector_ref": 0}
-    ).sort("created_at", -1)
-    
-    cvs = await cursor.to_list(length=10)
+        projection={"raw_text": 0, "cv_vector_ref": 0},
+        limit=10
+    )
     for cv in cvs:
         cv["id"] = str(cv["_id"])
         del cv["_id"]
@@ -388,33 +352,18 @@ async def self_score_cv(
     response: Response,
     payload: SelfScoreRequest,
     current_applicant: CurrentUser = Depends(require_applicant)
-):
-    db = get_db()
-    
-    job = await db[Collections.JOBS].find_one({"_id": ObjectId(payload.job_id), "status": JobStatus.OPEN.value})
+):    
+    job = await JobRepository.find_one({"_id": ObjectId(payload.job_id), "status": JobStatus.OPEN.value})
     if not job:
         raise HTTPException(status_code=404, detail="Không tìm thấy vị trí tuyển dụng hoặc đã đóng")
         
-    cv_doc = await db[Collections.CVS].find_one({"_id": ObjectId(payload.cv_document_id), "owner_user_id": current_applicant.id})
+    cv_doc = await CVRepository.find_one({"_id": ObjectId(payload.cv_document_id), "owner_user_id": current_applicant.id})
     if not cv_doc:
         raise HTTPException(status_code=404, detail="Không tìm thấy CV trong thư viện cá nhân")
 
-    raw_text = cv_doc.get("raw_text", "")
-    top_sentences = get_top_contributing_sentences(raw_text, job.get("jd_search_text", ""))
-
-    scoring_result = score_cv({
-        "raw_text": raw_text,
-        "word_count": len((raw_text or "").split()),
-        "skills": cv_doc.get("extracted_skills", []),
-        "years_of_experience": cv_doc.get("candidate_info", {}).get("years_of_experience", 0),
-        "skill_experience": cv_doc.get("candidate_info", {}).get("skill_experience", {}),
-        "education_level": cv_doc.get("candidate_info", {}).get("education_level", "Không đề cập"),
-        "job_hops": cv_doc.get("candidate_info", {}).get("job_hops", 1),
-        "gap_months": cv_doc.get("candidate_info", {}).get("gap_months", 0),
-        "cv_vector": cv_doc.get("cv_vector_ref", []),
-        "fraud_analysis": cv_doc.get("candidate_info", {}).get("fraud_analysis", {}),
-        "top_sentences": top_sentences
-    }, job)
+    # Tái sử dụng Helper Function
+    cv_data_for_scoring = _prepare_cv_for_scoring(cv_doc, job)
+    scoring_result = score_cv(cv_data_for_scoring, job)
 
     return {
         "status": "success", 
@@ -424,19 +373,13 @@ async def self_score_cv(
 
 @router.delete("/library/{cv_id}")
 async def delete_cv_from_library(cv_id: str, current_applicant: CurrentUser = Depends(require_applicant)):
-    db = get_db()
-    
-    cv_record = await db[Collections.CVS].find_one({
-        "_id": ObjectId(cv_id), 
-        "owner_user_id": current_applicant.id
-    })
-    
+    cv_record = await CVRepository.find_one({"_id": ObjectId(cv_id), "owner_user_id": current_applicant.id})
     if not cv_record:
         raise HTTPException(status_code=404, detail="Không tìm thấy CV")
         
     if cv_record.get("file_url"):
         await delete_file_from_cloudinary(cv_record["file_url"])
         
-    await db[Collections.CVS].delete_one({"_id": ObjectId(cv_id)})
+    await CVRepository.delete(cv_id, scope_filter={"owner_user_id": current_applicant.id})
         
     return {"status": "success", "message": "Đã xóa CV khỏi thư viện cá nhân"}

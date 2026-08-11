@@ -1,15 +1,125 @@
 import httpx
+from typing import List
+from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Body
 from datetime import datetime, timedelta, timezone
-from bson import ObjectId
 import jwt
 
-from app.database.config import get_db, Collections
-from app.auth import CurrentUser, require_hr, JWT_SECRET, ALGORITHM
-from app.database.models import CompanyStatus, UserRole
+from app.core.security import CurrentUser, require_hr, JWT_SECRET, ALGORITHM
+from app.schemas.common_schema import CompanyStatus, UserRole
+from app.schemas.company_schema import CompanyResponse
+from app.schemas.shared_schema import LocationDetail
 from app.services.email_service import send_hr_invite_email
+from app.services.analytics_service import AnalyticsService
+from app.repositories.user_repository import UserRepository
+from app.repositories.company_repository import CompanyRepository
+import re
+from app.database.config import get_db, Collections
+from pydantic import ValidationError
+from bson import ObjectId
 
 router = APIRouter(prefix="/api/v1/companies", tags=["Company & HR Management"])
+
+async def parse_address_heuristic(raw_address: str) -> dict:
+    if not raw_address:
+        return None
+        
+    db = get_db()
+    
+    address_clean = re.sub(r'[,.\-]', ' ', raw_address.lower())
+    address_clean = re.sub(r'\s+', ' ', address_clean)
+    address_clean = f" {address_clean} "
+    
+    provinces = await db[Collections.ADMINISTRATIVE_UNITS].find({"level": "province"}).to_list(100)
+    provinces.sort(key=lambda x: len(x['name']), reverse=True)
+    
+    matched_province = None
+    for p in provinces:
+        clean_name = re.sub(r'^(tỉnh|thành phố|tp)\s+', '', p['name'], flags=re.IGNORECASE).strip().lower()
+        if f" {clean_name} " in address_clean:
+            matched_province = p
+            break
+            
+    if not matched_province:
+        return None
+
+    prov_code = matched_province["code"]
+    
+    new_wards = await db[Collections.ADMINISTRATIVE_UNITS].find({
+        "parent_code": prov_code, 
+        "level": "ward", 
+        "version": "new"
+    }).to_list(1000)
+    
+    if new_wards:
+        new_wards.sort(key=lambda x: len(x['name']), reverse=True)
+        for w in new_wards:
+            clean_w_name = re.sub(r'^(phường|xã|thị trấn)\s+', '', w['name'], flags=re.IGNORECASE).strip().lower()
+            if f" {clean_w_name} " in address_clean:
+                return {
+                    "country": "Việt Nam",
+                    "version": "new",
+                    "province_code": prov_code,
+                    "province_name": matched_province["name"],
+                    "district_code": "",
+                    "district_name": "",
+                    "ward_code": w["code"],
+                    "ward_name": w["name"],
+                    "street_address": raw_address
+                }
+
+    old_districts = await db[Collections.ADMINISTRATIVE_UNITS].find({
+        "parent_code": prov_code,
+        "level": "district",
+        "version": "old"
+    }).to_list(100)
+    old_districts.sort(key=lambda x: len(x['name']), reverse=True)
+    
+    matched_district = None
+    for d in old_districts:
+        clean_d_name = re.sub(r'^(quận|huyện|thị xã|thành phố|tp)\s+', '', d['name'], flags=re.IGNORECASE).strip().lower()
+        if f" {clean_d_name} " in address_clean:
+            matched_district = d
+            break
+            
+    matched_ward = None
+    if matched_district:
+        old_wards = await db[Collections.ADMINISTRATIVE_UNITS].find({
+            "parent_code": matched_district["code"],
+            "level": "ward",
+            "version": "old"
+        }).to_list(1000)
+        old_wards.sort(key=lambda x: len(x['name']), reverse=True)
+        for w in old_wards:
+            clean_w_name = re.sub(r'^(phường|xã|thị trấn)\s+', '', w['name'], flags=re.IGNORECASE).strip().lower()
+            if f" {clean_w_name} " in address_clean:
+                matched_ward = w
+                break
+                
+    if matched_district:
+        return {
+            "country": "Việt Nam",
+            "version": "old",
+            "province_code": prov_code,
+            "province_name": matched_province["name"],
+            "district_code": matched_district["code"],
+            "district_name": matched_district["name"],
+            "ward_code": matched_ward["code"] if matched_ward else "",
+            "ward_name": matched_ward["name"] if matched_ward else "",
+            "street_address": raw_address
+        }
+
+    return {
+        "country": "Việt Nam",
+        "version": matched_province.get("version", "new"),
+        "province_code": prov_code,
+        "province_name": matched_province["name"],
+        "district_code": "",
+        "district_name": "",
+        "ward_code": "",
+        "ward_name": "",
+        "street_address": raw_address
+    }
 
 @router.get("/lookup-tax/{tax_code}")
 async def lookup_tax_code(tax_code: str):
@@ -21,10 +131,15 @@ async def lookup_tax_code(tax_code: str):
             data = response.json()
             
             if data.get("code") == "00" and data.get("data"):
+                raw_address = data["data"]["address"]
+                
+                structured_loc = await parse_address_heuristic(raw_address)
+
                 return {
                     "tax_code": data["data"]["id"],
                     "company_name": data["data"]["name"],
-                    "address": data["data"]["address"],
+                    "address": raw_address,
+                    "structured_location": structured_loc, 
                     "status": data["data"]["status"]
                 }
             elif data.get("code") == "52":
@@ -38,12 +153,8 @@ async def lookup_tax_code(tax_code: str):
     
 @router.get("/members", dependencies=[Depends(require_hr)])
 async def get_company_members(current_user: CurrentUser = Depends(require_hr)):
-    db = get_db()
-    cursor = db[Collections.USERS].find(
-        {"company_id": current_user.company_id},
-        {"hashed_password": 0, "reset_password_token": 0, "reset_password_expires": 0}
-    )
-    members = await cursor.to_list(length=100)
+    projection = {"hashed_password": 0, "reset_password_token": 0, "reset_password_expires": 0}
+    members = await UserRepository.find_many({"company_id": current_user.company_id}, projection=projection, limit=100)
     
     result = []
     for m in members:
@@ -54,8 +165,7 @@ async def get_company_members(current_user: CurrentUser = Depends(require_hr)):
 
 @router.get("/settings", dependencies=[Depends(require_hr)])
 async def get_company_settings(current_user: CurrentUser = Depends(require_hr)):
-    db = get_db()
-    company = await db[Collections.COMPANIES].find_one({"_id": ObjectId(current_user.company_id)})
+    company = await CompanyRepository.get_by_id(current_user.company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Không tìm thấy dữ liệu công ty")
     
@@ -70,25 +180,35 @@ async def update_company_settings(
 ):
     if current_user.role != UserRole.HR_OWNER.value:
         raise HTTPException(status_code=403, detail="Chỉ HR Owner mới được phép cập nhật thông tin công ty")
-        
-    db = get_db()
-    update_data = {
-        "updated_at": datetime.now(timezone.utc)
-    }
-    
-    allowed_fields = ["tax_code", "industry", "size", "website", "address", "license_file_url", "name"]
+
+    update_data = {"updated_at": datetime.now(timezone.utc)}
+
+    allowed_fields = ["tax_code", "industry", "size", "website", "address", 
+                       "license_file_url", "name", "logo_url", "banner_url", "location"]
     for field in allowed_fields:
         if field in payload:
             update_data[field] = payload[field]
-            
-    if "tax_code" in payload or "license_file_url" in payload:
+
+    if "location" in update_data:
+        try:
+            update_data["location"] = LocationDetail(**update_data["location"]).model_dump()
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=f"Dữ liệu địa điểm không hợp lệ: {e}")
+
+    current_company = await CompanyRepository.get_by_id(current_user.company_id)
+
+    tax_code_changed = "tax_code" in payload and payload["tax_code"] != current_company.get("tax_code")
+    license_changed = "license_file_url" in payload and payload["license_file_url"] != current_company.get("license_file_url")
+
+    if tax_code_changed or license_changed:
         update_data["status"] = CompanyStatus.PENDING_VERIFICATION.value
         
-    await db[Collections.COMPANIES].update_one(
-        {"_id": ObjectId(current_user.company_id)},
-        {"$set": update_data}
-    )
-    return {"status": "success", "message": "Đã cập nhật thông tin công ty"}
+    await CompanyRepository.update(current_user.company_id, update_data)
+    return {
+        "status": "success",
+        "message": "Đã cập nhật thông tin công ty",
+        "new_company_status": update_data.get("status", current_company.get("status"))
+    }
 
 @router.post("/invite", dependencies=[Depends(require_hr)])
 async def invite_hr_member(
@@ -99,12 +219,10 @@ async def invite_hr_member(
     if current_user.role != UserRole.HR_OWNER.value:
         raise HTTPException(status_code=403, detail="Chỉ HR Owner mới có quyền mời thành viên")
         
-    db = get_db()
+    company = await CompanyRepository.get_by_id(current_user.company_id)
+    user = await UserRepository.get_by_id(current_user.id)
     
-    company = await db[Collections.COMPANIES].find_one({"_id": ObjectId(current_user.company_id)})
-    user = await db[Collections.USERS].find_one({"_id": ObjectId(current_user.id)})
-    
-    existing_user = await db[Collections.USERS].find_one({"email": email})
+    existing_user = await UserRepository.find_one({"email": email})
     if existing_user:
         raise HTTPException(status_code=400, detail="Email này đã có tài khoản trên hệ thống")
         
@@ -127,3 +245,52 @@ async def invite_hr_member(
     )
     
     return {"status": "success", "message": f"Đã gửi thư mời thành công đến {email}"}
+
+@router.get("/{company_id}/analytics", dependencies=[Depends(require_hr)])
+async def get_company_analytics(company_id: str, current_user: CurrentUser = Depends(require_hr)):
+    if current_user.role != UserRole.HR_OWNER.value or current_user.company_id != company_id:
+        raise HTTPException(
+            status_code=403, 
+            detail="Bạn không có quyền xem dữ liệu phân tích của công ty này"
+        )
+    
+    result = await AnalyticsService.get_company_pro_analytics(company_id)
+    
+    result["status"] = "success"
+    return result
+
+@router.get("/public/list", response_model=List[CompanyResponse])
+async def get_public_companies():
+    pipeline = [
+        {"$match": {"status": CompanyStatus.VERIFIED.value}},
+        {"$sort": {"avg_rating": -1, "view_count": -1, "created_at": -1}},
+        {"$limit": 100}
+    ]
+    
+    companies = await CompanyRepository.aggregate_companies(pipeline)
+    
+    result = []
+    for comp in companies:
+        comp["id"] = str(comp["_id"])
+        result.append(comp)
+        
+    return result
+
+@router.get("/public/{company_id}", response_model=CompanyResponse)
+async def get_public_company_detail(company_id: str):
+    try:
+        obj_id = ObjectId(company_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Định dạng ID không hợp lệ")
+
+    company = await CompanyRepository.find_one({"_id": obj_id, "status": CompanyStatus.VERIFIED.value})
+    if not company:
+        raise HTTPException(status_code=404, detail="Không tìm thấy công ty hoặc công ty chưa được xác thực")
+        
+    company["id"] = str(company["_id"])
+    
+    current_views = company.get("view_count", 0)
+    await CompanyRepository.update(company_id, {"view_count": current_views + 1})
+    company["view_count"] = current_views + 1
+    
+    return company

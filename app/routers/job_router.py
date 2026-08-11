@@ -1,24 +1,30 @@
 from fastapi import APIRouter, Depends, HTTPException, Body, BackgroundTasks
 from typing import List
 from datetime import datetime, timezone
-from bson import ObjectId
 
-from app.auth import CurrentUser, require_hr, require_hr_or_admin, get_scope_filter
-from app.database.config import get_db, Collections
-from app.database.models import JobCreateEnterprise, JobResponse, JobStatus, UserRole, ApplicationStatus, CompanyStatus
+from app.core.security import CurrentUser, require_hr, require_hr_or_admin, get_scope_filter
+from app.middleware.subscription import verify_job_quota
+from app.database.config import Collections
+from app.schemas.job_schema import JobCreateEnterprise, JobResponse
+from app.schemas.common_schema import JobStatus, UserRole, CompanyStatus
+from app.repositories.job_repository import JobRepository
+from app.repositories.company_repository import CompanyRepository
+from app.repositories.application_repository import ApplicationRepository
+from app.repositories.cv_repository import CVRepository
+
 from app.services.nlp_engine import score_cv
 from app.services.vector_engine import compress_jd_data, get_embedding
+from app.services.audit_service import log_action
+from app.schemas.common_schema import AuditAction
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["Job Management & Ranking"])
 
 async def rescore_all_applications_for_job(job_id: str, jd_data: dict):
-    db = get_db()
-    cursor = db[Collections.APPLICATIONS].find({"job_id": job_id})
-    applications = await cursor.to_list(length=None)
+    applications = await ApplicationRepository.find_all({"job_id": job_id}, limit=None)
     
     for app in applications:
         cv_id = app["cv_id"]
-        cv_record = await db[Collections.CVS].find_one({"_id": ObjectId(cv_id)})
+        cv_record = await CVRepository.get_by_id(cv_id)
         if not cv_record:
             continue
             
@@ -36,22 +42,17 @@ async def rescore_all_applications_for_job(job_id: str, jd_data: dict):
         
         new_score = score_cv(cv_data_for_scoring, jd_data)
         
-        await db[Collections.APPLICATIONS].update_one(
-            {"_id": app["_id"]},
-            {"$set": {"ai_score": new_score}}
-        )
+        await ApplicationRepository.update_by_query({"_id": app["_id"]}, {"$set": {"ai_score": new_score}})
     print(f"Background Task Hoàn tất: Đã chấm lại {len(applications)} CV cho Job {job_id}")
 
-
 @router.post("/")
-async def create_job(job: JobCreateEnterprise, current_user: CurrentUser = Depends(require_hr)):
-    db = get_db()
+async def create_job(job: JobCreateEnterprise, current_user: CurrentUser = Depends(verify_job_quota)):
     job_dict = job.model_dump()
 
     if current_user.role != UserRole.ADMIN:
         job_dict["company_id"] = current_user.company_id
 
-    company = await db[Collections.COMPANIES].find_one({"_id": ObjectId(job_dict["company_id"])})
+    company = await CompanyRepository.get_by_id(job_dict["company_id"])
     if not company or company.get("status") != CompanyStatus.VERIFIED.value:
         raise HTTPException(
             status_code=403, 
@@ -71,13 +72,11 @@ async def create_job(job: JobCreateEnterprise, current_user: CurrentUser = Depen
         "jd_vector_ref": jd_vector
     })
     
-    result = await db[Collections.JOBS].insert_one(job_dict)
-    return {"message": "Tạo chiến dịch thành công", "job_id": str(result.inserted_id)}
+    job_id = await JobRepository.create(job_dict)
+    return {"message": "Tạo chiến dịch thành công", "job_id": job_id}
 
 @router.get("/", response_model=List[JobResponse], dependencies=[Depends(require_hr_or_admin)])
 async def get_my_jobs(scope_filter: dict = Depends(get_scope_filter)):
-    db = get_db()
-    
     pipeline = []
     if scope_filter:
         pipeline.append({"$match": scope_filter})
@@ -99,7 +98,7 @@ async def get_my_jobs(scope_filter: dict = Depends(get_scope_filter)):
         {"$unwind": {"path": "$company_info", "preserveNullAndEmptyArrays": True}}
     ])
     
-    jobs = await db[Collections.JOBS].aggregate(pipeline).to_list(length=100)
+    jobs = await JobRepository.aggregate_jobs(pipeline)
     
     result = []
     for job in jobs:
@@ -113,18 +112,22 @@ async def get_my_jobs(scope_filter: dict = Depends(get_scope_filter)):
         
     return result
 
+from bson import ObjectId
+from fastapi import HTTPException, Depends
+
 @router.get("/{job_id}", response_model=JobResponse, dependencies=[Depends(require_hr_or_admin)])
 async def get_job_detail(job_id: str, scope_filter: dict = Depends(get_scope_filter)):
-    db = get_db()
-    filter_query = {"_id": ObjectId(job_id), **scope_filter}
-    
-    job = await db[Collections.JOBS].find_one(filter_query)
+    try:
+        obj_id = ObjectId(job_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Định dạng ID không hợp lệ")
+
+    job = await JobRepository.find_one({"_id": obj_id, **scope_filter})
     if not job:
         raise HTTPException(status_code=404, detail="Không tìm thấy chiến dịch hoặc bạn không có quyền xem")
         
     job["id"] = str(job["_id"])
     return job
-
 
 @router.put("/{job_id}")
 async def update_job(
@@ -134,23 +137,24 @@ async def update_job(
     current_user: CurrentUser = Depends(require_hr),
     scope_filter: dict = Depends(get_scope_filter)
 ):
-    db = get_db()
-
     if current_user.role != UserRole.ADMIN:
-        company = await db[Collections.COMPANIES].find_one({"_id": ObjectId(current_user.company_id)})
+        company = await CompanyRepository.get_by_id(current_user.company_id)
         if not company or company.get("status") != CompanyStatus.VERIFIED.value:
             raise HTTPException(
                 status_code=403, 
                 detail="Công ty của bạn chưa được xác thực (KYC). Vui lòng chờ Admin duyệt để có thể cập nhật chiến dịch tuyển dụng."
             )
     
-    filter_query = {"_id": ObjectId(job_id), **scope_filter}
-    existing_job = await db[Collections.JOBS].find_one(filter_query)
+    existing_job = await JobRepository.get_by_id(job_id, extra_query=scope_filter)
     
     if not existing_job:
         raise HTTPException(status_code=404, detail="Không tìm thấy Job hoặc bạn không có quyền chỉnh sửa")
 
     update_data = job_update.model_dump()
+    
+    if current_user.role != UserRole.ADMIN:
+        update_data.pop("is_hot", None)
+
     compressed_jd = compress_jd_data(update_data)
     
     new_jd_vector = await get_embedding(compressed_jd)
@@ -163,36 +167,42 @@ async def update_job(
         "jd_vector_ref": new_jd_vector
     })
 
-    await db[Collections.JOBS].update_one(filter_query, {"$set": update_data})
-    
+    await JobRepository.update(job_id, update_data, extra_query=scope_filter)
+
+    before_state = {k: v for k, v in existing_job.items() if k != "_id"}
+    after_state = {**before_state, **update_data}
+
+    await log_action(
+        actor_id=current_user.id,
+        actor_role=current_user.role,
+        action=AuditAction.JOB_UPDATED if hasattr(AuditAction, 'JOB_UPDATED') else "job_updated",
+        target_type="job",
+        target_id=job_id,
+        note="Cập nhật JD hoặc Trọng số AI",
+        before_state=before_state,
+        after_state=after_state
+    )
+
     background_tasks.add_task(rescore_all_applications_for_job, job_id, update_data)
-    
+
     return {
         "status": "success", 
         "message": "Cập nhật JD thành công. Hệ thống đang tự động chấm lại điểm ứng viên ở chế độ chạy ngầm."
     }
 
-
 @router.delete("/{job_id}", dependencies=[Depends(require_hr)])
 async def delete_job(job_id: str, scope_filter: dict = Depends(get_scope_filter)):
-    db = get_db()
-    filter_query = {"_id": ObjectId(job_id), **scope_filter}
-    
-    result = await db[Collections.JOBS].delete_one(filter_query)
-    if result.deleted_count == 0:
+    deleted_count = await JobRepository.delete(job_id, extra_query=scope_filter)
+    if deleted_count == 0:
         raise HTTPException(status_code=404, detail="Không tìm thấy Job hoặc bạn không có quyền xóa")
         
-    await db[Collections.APPLICATIONS].delete_many({"job_id": job_id})
+    await ApplicationRepository.delete_many({"job_id": job_id})
     return {"status": "success", "message": "Đã xóa chiến dịch. CV ứng viên vẫn được bảo lưu trong Kho hồ sơ."}
-
 
 @router.get("/{job_id}/ranking", dependencies=[Depends(require_hr_or_admin)])
 async def get_job_ranking(job_id: str, scope_filter: dict = Depends(get_scope_filter)):
-    db = get_db()
-    
     try:
-        job_filter = {"_id": ObjectId(job_id), **scope_filter}
-        job = await db[Collections.JOBS].find_one(job_filter)
+        job = await JobRepository.get_by_id(job_id, extra_query=scope_filter)
     except:
         raise HTTPException(status_code=400, detail="Mã Job không hợp lệ")
         
@@ -202,7 +212,7 @@ async def get_job_ranking(job_id: str, scope_filter: dict = Depends(get_scope_fi
     company_info = None
     if job.get("company_id"):
         try:
-            company = await db[Collections.COMPANIES].find_one({"_id": ObjectId(job["company_id"])})
+            company = await CompanyRepository.get_by_id(job["company_id"])
             if company:
                 company["id"] = str(company["_id"])
                 del company["_id"]
@@ -216,7 +226,7 @@ async def get_job_ranking(job_id: str, scope_filter: dict = Depends(get_scope_fi
         {"$limit": 200}
     ]
     
-    applications = await db[Collections.APPLICATIONS].aggregate(pipeline).to_list(length=200)
+    applications = await ApplicationRepository.aggregate_applications(pipeline)
     
     leaderboard = []
     for app in applications:
@@ -241,32 +251,87 @@ async def get_job_ranking(job_id: str, scope_filter: dict = Depends(get_scope_fi
         "leaderboard": leaderboard
     }
 
-@router.get("/dashboard/analytics", dependencies=[Depends(require_hr_or_admin)])
-async def get_dashboard_analytics(scope_filter: dict = Depends(get_scope_filter)):
-    db = get_db()
+from fastapi import Query
+from app.services.analytics_service import AnalyticsService
+
+@router.get("/dashboard/metrics", dependencies=[Depends(require_hr)])
+async def get_dashboard_metrics(
+    scope: str = Query("company", description="Góc nhìn: 'company' (Owner) hoặc 'me' (Member)"),
+    current_user: CurrentUser = Depends(require_hr)
+):
+    if scope == "me":
+        data = await AnalyticsService.get_member_workspace_metrics(current_user.id)
+        return {"status": "success", "data": data}
+    else:
+        if current_user.role != UserRole.HR_OWNER.value:
+            raise HTTPException(status_code=403, detail="Chỉ HR Owner mới được xem số liệu toàn công ty")
+            
+        data = await AnalyticsService.get_owner_dashboard_metrics(current_user.company_id)
+        return {"status": "success", "data": data}
+
+@router.get("/public/list", response_model=List[JobResponse])
+async def get_public_jobs():
+    pipeline = [
+        {"$match": {"status": JobStatus.OPEN.value}},
+        {"$sort": {"created_at": -1}},
+        {"$limit": 100},
+        {
+            "$lookup": {
+                "from": Collections.COMPANIES,
+                "let": {"c_id": {"$toObjectId": "$company_id"}},
+                "pipeline": [
+                    {"$match": {"$expr": {"$eq": ["$_id", "$$c_id"]}}},
+                    {"$project": {"name": 1}}
+                ],
+                "as": "company_info"
+            }
+        },
+        {"$unwind": {"path": "$company_info", "preserveNullAndEmptyArrays": True}}
+    ]
     
-    total_jobs = await db[Collections.JOBS].count_documents(scope_filter)
+    jobs = await JobRepository.aggregate_jobs(pipeline)
     
-    open_jobs_filter = {"status": JobStatus.OPEN.value, **scope_filter}
-    open_jobs = await db[Collections.JOBS].count_documents(open_jobs_filter)
+    result = []
+    for job in jobs:
+        job["id"] = str(job["_id"])
+        job["company_name"] = job.get("company_info", {}).get("name", "Công ty Ẩn danh")
+        job.pop("company_info", None)
+        result.append(job)
+        
+    return result
+
+@router.get("/public/{job_id}", response_model=JobResponse)
+async def get_public_job_detail(job_id: str):
+    try:
+        obj_id = ObjectId(job_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Định dạng ID không hợp lệ")
+
+    pipeline = [
+        {"$match": {"_id": obj_id, "status": JobStatus.OPEN.value}},
+        {
+            "$lookup": {
+                "from": Collections.COMPANIES,
+                "let": {"c_id": {"$toObjectId": "$company_id"}},
+                "pipeline": [
+                    {"$match": {"$expr": {"$eq": ["$_id", "$$c_id"]}}},
+                    {"$project": {"name": 1}}
+                ],
+                "as": "company_info"
+            }
+        },
+        {"$unwind": {"path": "$company_info", "preserveNullAndEmptyArrays": True}}
+    ]
+
+    jobs = await JobRepository.aggregate_jobs(pipeline)
     
-    total_cvs_in_pool = await db[Collections.CVS].count_documents(scope_filter)
+    if not jobs or len(jobs) == 0:
+        raise HTTPException(status_code=404, detail="Không tìm thấy việc làm hoặc chiến dịch đã đóng")
+        
+    job = jobs[0]
+    job["id"] = str(job["_id"])
     
-    pipeline = []
-    if scope_filter:
-        pipeline.append({"$match": scope_filter})
-    pipeline.append({"$group": {"_id": "$status", "count": {"$sum": 1}}})
+    job["company_name"] = job.get("company_info", {}).get("name", "Công ty Ẩn danh")
+    job.pop("company_info", None)
     
-    status_counts = await db[Collections.APPLICATIONS].aggregate(pipeline).to_list(length=None)
-    
-    status_breakdown = {
-        item["_id"] if item["_id"] else ApplicationStatus.NEW.value: item["count"] 
-        for item in status_counts
-    }
-    
-    return {
-        "total_jobs": total_jobs,
-        "open_jobs": open_jobs,
-        "total_cvs_in_pool": total_cvs_in_pool,
-        "status_breakdown": status_breakdown
-    }
+    return job

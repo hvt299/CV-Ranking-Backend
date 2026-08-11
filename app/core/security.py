@@ -9,7 +9,8 @@ from pydantic import BaseModel, EmailStr
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
-from app.database.models import UserRole
+from app.schemas.common_schema import UserRole
+from app.repositories.user_repository import UserRepository
 
 JWT_SECRET = os.getenv("JWT_SECRET", "CVRanking@JWT")
 ALGORITHM = "HS256"
@@ -24,6 +25,7 @@ class CurrentUser(BaseModel):
     email: EmailStr
     role: UserRole
     company_id: Optional[str] = None
+    department_id: Optional[str] = None
 
 def verify_password(plain_password: str, hashed_password: str):
     pre_hashed_password = hashlib.sha256(plain_password.encode()).hexdigest()
@@ -63,24 +65,24 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> CurrentUser:
     except jwt.PyJWTError:
         raise credentials_exception
 
-    from app.database.config import get_db, Collections
-    from bson import ObjectId
+    user = await UserRepository.get_by_id(user_id)
     
-    db = get_db()
-    user = await db[Collections.USERS].find_one({"_id": ObjectId(user_id)})
-    
-    if not user:
+    if not user or user.get("deleted_at") is not None:
         raise credentials_exception
-
-    try:
-        return CurrentUser(
-            id=str(user["_id"]),
-            email=user["email"],
-            role=UserRole(user.get("role", UserRole.APPLICANT.value)),
-            company_id=user.get("company_id")
+        
+    if not user.get("is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tài khoản của bạn đã bị khóa."
         )
-    except ValueError:
-        raise credentials_exception
+
+    return CurrentUser(
+        id=str(user["_id"]),
+        email=user["email"],
+        role=UserRole(user.get("role", UserRole.APPLICANT.value)),
+        company_id=user.get("company_id"),
+        department_id=user.get("department_id")
+    )
 
 async def require_admin(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
     if current_user.role != UserRole.ADMIN:

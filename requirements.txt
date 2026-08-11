@@ -15,7 +15,7 @@ bcrypt==4.0.1
 python-dotenv
 
 # --- LLM ---
-google-generativeai
+google-genai
 
 # --- HTTP Clients (Dùng gọi Colab API & Brevo Email) ---
 httpx
