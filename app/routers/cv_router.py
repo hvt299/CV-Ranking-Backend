@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from app.database.config import Collections
 from app.schemas.application_schema import ApplicationUpdate
-from app.schemas.common_schema import ApplicationStatus, ApplicationSource, NotificationType, NotificationReadStatus
+from app.schemas.common_schema import ApplicationStatus, ApplicationSource, NotificationType, NotificationReadStatus, AuditAction
 from app.repositories.job_repository import JobRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.application_repository import ApplicationRepository
@@ -15,6 +15,7 @@ from app.repositories.notification_repository import NotificationRepository
 from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
 from app.services.vector_engine import compress_cv_data, get_cv_embeddings, get_top_contributing_sentences
 from app.services.document_forensics import detect_hidden_text
+from app.services.audit_service import log_action
 from app.core.security import require_hr, require_hr_or_admin, get_scope_filter, CurrentUser
 from app.middleware.rate_limit import limiter
 from app.middleware.subscription import verify_cv_quota
@@ -395,6 +396,17 @@ async def update_application_status(
                 }
 
                 await NotificationRepository.create(notification)
+
+        await log_action(
+            actor_id=current_user.id,
+            actor_role=current_user.role,
+            action=AuditAction.APPLICATION_STATUS_CHANGED,
+            target_type="application",
+            target_id=app_id,
+            note=f"Đổi trạng thái ứng viên: {current_app.get('status')} -> {update_data.status.value if update_data.status else 'Giữ nguyên'}",
+            before_state={"status": current_app.get("status")},
+            after_state={"status": update_data.status.value if update_data.status else current_app.get("status")}
+        )
 
         return {"status": "success", "message": "Đã cập nhật trạng thái ứng viên thành công"}
     except Exception as e:

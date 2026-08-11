@@ -58,10 +58,13 @@ class BaseRepository:
         return result.modified_count
 
     @classmethod
-    async def find_many(cls, query: dict = {}, projection: dict = None, limit: int = 500, include_deleted: bool = False) -> List[Dict[str, Any]]:
+    async def find_many(cls, query: dict = {}, projection: dict = None, sort: list = None, limit: int = 500, include_deleted: bool = False) -> List[Dict[str, Any]]:
         db = get_db()
         query = cls._apply_soft_delete(query, include_deleted)
         cursor = db[cls.collection_name].find(query, projection)
+
+        if sort:
+            cursor = cursor.sort(sort)
 
         fetch_limit = limit if limit > 0 else None
         if fetch_limit:
@@ -96,3 +99,9 @@ class BaseRepository:
             query, {"$set": {"deleted_at": datetime.now(timezone.utc)}}
         )
         return result.modified_count
+
+    @classmethod
+    async def distinct(cls, field: str, query: dict = {}, include_deleted: bool = False) -> list:
+        db = get_db()
+        query = cls._apply_soft_delete(query, include_deleted)
+        return await db[cls.collection_name].distinct(field, query)

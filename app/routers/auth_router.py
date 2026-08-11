@@ -13,11 +13,13 @@ from app.schemas.user_schema import UserCreate
 from app.schemas.auth_schema import UserLogin, Token
 from app.schemas.company_schema import CompanyCreate
 from app.schemas.shared_schema import LocationDetail
+from app.schemas.common_schema import AuditAction
 from app.repositories.user_repository import UserRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.job_repository import JobRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.applicant_profile_repository import ApplicantProfileRepository
+from app.services.audit_service import log_action
 
 from app.core.security import (
     CurrentUser,
@@ -777,5 +779,14 @@ async def anonymize_account(current_user: CurrentUser = Depends(get_current_user
         )
     
     await RefreshTokenRepository.delete_many({"user_id": current_user.id})
+
+    await log_action(
+        actor_id=current_user.id,
+        actor_role=user.get("role"),
+        action=AuditAction.USER_ANONYMIZED,
+        target_type="user",
+        target_id=current_user.id,
+        note="Người dùng chủ động xóa và ẩn danh tài khoản vĩnh viễn"
+    )
 
     return {"status": "success", "message": "Tài khoản của bạn đã được xóa và ẩn danh vĩnh viễn."}

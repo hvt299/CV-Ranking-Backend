@@ -1,10 +1,15 @@
 from fastapi import APIRouter, Query
-from typing import List, Optional
+from typing import Optional
 import re
 
 from app.repositories.administrative_unit_repository import AdministrativeUnitRepository
 from app.repositories.skill_repository import SkillRepository
-from app.schemas.common_schema import AdminLevel
+from app.schemas.common_schema import AdminLevel, UserRole, CompanyStatus, JobStatus, ApplicationStatus
+
+from app.repositories.user_repository import UserRepository
+from app.repositories.company_repository import CompanyRepository
+from app.repositories.job_repository import JobRepository
+from app.repositories.application_repository import ApplicationRepository
 
 router = APIRouter(prefix="/api/v1/system", tags=["System & Master Data"])
 
@@ -75,3 +80,33 @@ async def get_sub_locations(parent_code: str):
         
     result.sort(key=lambda x: x.get("name", ""))
     return result
+
+@router.get("/statistics")
+async def get_system_statistics():
+    total_candidates = await UserRepository.count_documents({"role": UserRole.APPLICANT.value, "deleted_at": None})
+    total_companies = await CompanyRepository.count_documents({"status": CompanyStatus.VERIFIED.value, "deleted_at": None})
+    total_jobs = await JobRepository.count_documents({"status": JobStatus.OPEN.value, "deleted_at": None})
+    
+    success_rate = 0
+    
+    if total_jobs > 0:
+        jobs_with_hq_cvs = await ApplicationRepository.distinct("job_id", {"ai_score.total_score": {"$gte": 50}})
+        rate_quality = (len(jobs_with_hq_cvs) / total_jobs) * 100
+        
+        total_apps = await ApplicationRepository.count_documents({})
+        rate_conversion = 0
+        if total_apps > 0:
+            success_apps = await ApplicationRepository.count_documents({
+                "status": {"$in": [ApplicationStatus.INTERVIEW.value, ApplicationStatus.OFFERED.value, ApplicationStatus.HIRED.value]}
+            })
+            rate_conversion = (success_apps / total_apps) * 100
+            
+        success_rate = round((rate_quality + rate_conversion) / 2)
+        success_rate = min(100, max(0, success_rate))
+
+    return {
+        "total_candidates": total_candidates,
+        "total_companies": total_companies,
+        "total_jobs": total_jobs,
+        "success_rate": success_rate
+    }

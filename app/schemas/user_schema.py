@@ -17,6 +17,7 @@ class UserCreate(BaseModel):
     
     job_title_internal: Optional[str] = Field(default=None, description="Chức danh nội bộ (VD: Trưởng phòng Tuyển dụng)")
     extension_phone: Optional[str] = Field(default=None, description="Số máy lẻ nội bộ")
+    is_active: bool = Field(default=True, description="Trạng thái hoạt động của tài khoản (Bị Admin khóa hay không)")
 
     @field_validator("password")
     def validate_password(cls, v):

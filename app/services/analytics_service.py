@@ -1,10 +1,10 @@
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, List
+from typing import Dict, Any
 from app.repositories.job_repository import JobRepository
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.user_repository import UserRepository
-from app.schemas.common_schema import JobStatus, ApplicationStatus, UserRole
+from app.schemas.common_schema import JobStatus, ApplicationStatus, UserRole, CompanyStatus
 
 class AnalyticsService:
     
@@ -211,4 +211,88 @@ class AnalyticsService:
                 "ai_score_distribution": score_chart,
                 "applications_trend": trend_chart
             }
+        }
+
+    @classmethod
+    async def get_admin_dashboard_metrics(cls) -> Dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        thirty_days_ago = now - timedelta(days=30)
+        
+        total_users = await UserRepository.count_documents({"deleted_at": None})
+        new_users_30d = await UserRepository.count_documents({"deleted_at": None, "created_at": {"$gte": thirty_days_ago}})
+        
+        total_companies = await CompanyRepository.count_documents({"deleted_at": None})
+        verified_companies = await CompanyRepository.count_documents({"deleted_at": None, "status": CompanyStatus.VERIFIED.value})
+        pending_companies = await CompanyRepository.count_documents({"deleted_at": None, "status": CompanyStatus.PENDING_VERIFICATION.value})
+        
+        total_jobs = await JobRepository.count_documents({"deleted_at": None, "status": JobStatus.OPEN.value})
+
+        recent_pending = await CompanyRepository.find_many(
+            {"deleted_at": None, "status": CompanyStatus.PENDING_VERIFICATION.value},
+            sort=[("created_at", -1)],
+            limit=5
+        )
+        
+        recent_list = []
+        for comp in recent_pending:
+            comp["id"] = str(comp["_id"])
+            del comp["_id"]
+            recent_list.append(comp)
+
+        return {
+            "overview_stats": {
+                "total_users": {"value": total_users, "trend": new_users_30d, "is_up": True},
+                "total_companies": {"value": total_companies, "trend": verified_companies, "is_up": True},
+                "pending_kyc": {"value": pending_companies, "trend": 0, "is_up": False},
+                "active_jobs": {"value": total_jobs, "trend": 0, "is_up": True},
+            },
+            "recent_pending_companies": recent_list
+        }
+
+    @classmethod
+    async def get_admin_system_analytics(cls) -> Dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        
+        raw_company_status = await CompanyRepository.aggregate_companies([
+            {"$match": {"deleted_at": None}},
+            {"$group": {"_id": "$status", "count": {"$sum": 1}}}
+        ])
+        
+        status_chart = []
+        for item in raw_company_status:
+            status = item["_id"]
+            count = item["count"]
+            if status == CompanyStatus.VERIFIED.value:
+                status_chart.append({"name": "Đã duyệt", "value": count, "color": "var(--color-success-500)"})
+            elif status == CompanyStatus.PENDING_VERIFICATION.value:
+                status_chart.append({"name": "Chờ duyệt", "value": count, "color": "var(--color-warning-500)"})
+            elif status == CompanyStatus.REJECTED.value:
+                status_chart.append({"name": "Từ chối", "value": count, "color": "var(--color-error-500)"})
+            elif status == CompanyStatus.SUSPENDED.value:
+                status_chart.append({"name": "Tạm khóa", "value": count, "color": "var(--color-slate-500)"})
+
+        growth_chart = []
+        for i in range(13, -1, -1):
+            date_str = (now - timedelta(days=i)).strftime("%d/%m")
+            growth_chart.append({"date": date_str, "users": 0, "companies": 0})
+            
+        raw_users = await UserRepository.aggregate_users([
+            {"$match": {"deleted_at": None, "created_at": {"$gte": now - timedelta(days=14)}}},
+            {"$group": {"_id": {"$dateToString": {"format": "%d/%m", "date": "$created_at"}}, "count": {"$sum": 1}}}
+        ])
+        user_dict = {item["_id"]: item["count"] for item in raw_users}
+
+        raw_companies = await CompanyRepository.aggregate_companies([
+            {"$match": {"deleted_at": None, "created_at": {"$gte": now - timedelta(days=14)}}},
+            {"$group": {"_id": {"$dateToString": {"format": "%d/%m", "date": "$created_at"}}, "count": {"$sum": 1}}}
+        ])
+        comp_dict = {item["_id"]: item["count"] for item in raw_companies}
+
+        for day in growth_chart:
+            day["users"] = user_dict.get(day["date"], 0)
+            day["companies"] = comp_dict.get(day["date"], 0)
+
+        return {
+            "company_status_chart": status_chart,
+            "growth_trend_chart": growth_chart
         }

@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, Query
+from typing import Optional
 import os
+import math
 
 from app.core.security import CurrentUser, require_admin
 from app.schemas.common_schema import UserRole, CompanyStatus, AuditAction
@@ -9,9 +11,11 @@ from app.schemas.company_schema import CompanyVerifyAction
 from app.repositories.user_repository import UserRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.audit_repository import AuditRepository
+from app.services.analytics_service import AnalyticsService
+from app.services.audit_service import log_action
 
 from pydantic import BaseModel, Field, EmailStr
-from app.services.audit_service import log_action
+
 
 router = APIRouter(prefix="/api/v1/admin", tags=["Admin"])
 BOOTSTRAP_SECRET = os.getenv("ADMIN_BOOTSTRAP_SECRET", "")
@@ -21,6 +25,9 @@ class BootstrapRequest(BaseModel):
 
 class UpdateRoleRequest(BaseModel):
     role: UserRole = Field(..., description="Phân quyền mới (admin, hr_owner, hr_member, applicant)")
+
+class UpdateUserStatusRequest(BaseModel):
+    is_active: bool = Field(..., description="Trạng thái khóa/mở khóa tài khoản")
 
 @router.post("/bootstrap")
 async def bootstrap_admin(payload: BootstrapRequest):
@@ -56,14 +63,50 @@ async def list_users():
         
     return result
 
-@router.patch("/users/{user_id}/role", dependencies=[Depends(require_admin)])
-async def update_user_role(user_id: str, payload: UpdateRoleRequest):
-    modified_count = await UserRepository.update(user_id, {"role": payload.role.value})
-    
-    if modified_count == 0:
+@router.patch("/users/{user_id}/role")
+async def update_user_role(user_id: str, payload: UpdateRoleRequest, current_admin: CurrentUser = Depends(require_admin)):
+    user = await UserRepository.get_by_id(user_id)
+    if not user:
         raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
         
+    before_role = user.get("role")
+    await UserRepository.update(user_id, {"role": payload.role.value})
+    
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.USER_ROLE_UPDATED,
+        target_type="user",
+        target_id=user_id,
+        note=f"Admin thay đổi quyền từ {before_role} sang {payload.role.value}",
+        before_state={"role": before_role},
+        after_state={"role": payload.role.value}
+    )
+        
     return {"status": "success", "message": f"Đã cập nhật role thành '{payload.role.value}'"}
+
+@router.patch("/users/{user_id}/status")
+async def update_user_status(user_id: str, payload: UpdateUserStatusRequest, current_admin: CurrentUser = Depends(require_admin)):
+    user = await UserRepository.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+        
+    before_status = user.get("is_active", True)
+    await UserRepository.update(user_id, {"is_active": payload.is_active})
+    
+    action_msg = "Mở khóa" if payload.is_active else "Khóa đình chỉ"
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.USER_STATUS_UPDATED,
+        target_type="user",
+        target_id=user_id,
+        note=f"Admin thao tác: {action_msg} tài khoản",
+        before_state={"is_active": before_status},
+        after_state={"is_active": payload.is_active}
+    )
+        
+    return {"status": "success", "message": f"Đã {action_msg} tài khoản thành công"}
 
 @router.get("/companies", dependencies=[Depends(require_admin)])
 async def list_companies(status: str = None):
@@ -123,23 +166,58 @@ async def verify_company(
     return {"status": "success", "message": "Đã xử lý trạng thái công ty"}
 
 @router.get("/audit-logs", dependencies=[Depends(require_admin)])
-async def get_audit_logs():
-    logs = await AuditRepository.find_many({}, limit=200)
+async def get_audit_logs(
+    page: int = Query(1, ge=1, description="Trang hiện tại"),
+    page_size: int = Query(20, ge=1, le=100, description="Số lượng record mỗi trang"),
+    action: Optional[str] = Query(None, description="Lọc theo loại hành động"),
+    actor_id: Optional[str] = Query(None, description="Lọc theo ID người thực hiện"),
+    start_date: Optional[datetime] = Query(None, description="Từ ngày"),
+    end_date: Optional[datetime] = Query(None, description="Đến ngày")
+):
+    query = {}
+    if action:
+        query["action"] = action
+    if actor_id:
+        query["actor_id"] = actor_id
+        
+    if start_date or end_date:
+        date_query = {}
+        if start_date:
+            date_query["$gte"] = start_date
+        if end_date:
+            date_query["$lte"] = end_date
+        query["created_at"] = date_query
+        
+    logs, total_items = await AuditRepository.get_paginated_logs(query, page, page_size)
     
     result = []
     for lg in logs:
         lg["id"] = str(lg["_id"])
         del lg["_id"]
         result.append(lg)
-    return result
+        
+    total_pages = math.ceil(total_items / page_size) if total_items > 0 else 1
+        
+    return {
+        "status": "success",
+        "data": {
+            "items": result,
+            "pagination": {
+                "total_items": total_items,
+                "total_pages": total_pages,
+                "current_page": page,
+                "page_size": page_size
+            }
+        }
+    }
 
 @router.patch("/companies/{company_id}")
 async def admin_update_company(
-    company_id: str, 
+    company_id: str,
     update_data: dict = Body(...),
     current_admin: CurrentUser = Depends(require_admin)
 ):
-    allowed_fields = ["name", "tax_code", "industry", "size", "website", "address", "license_file_url"]
+    allowed_fields = ["name", "tax_code", "industry", "size", "website", "address", "license_file_url", "status"]
     clean_data = {k: v for k, v in update_data.items() if k in allowed_fields}
 
     if not clean_data:
@@ -166,3 +244,13 @@ async def admin_update_company(
     )
 
     return {"status": "success", "message": "Cập nhật thành công"}
+
+@router.get("/dashboard/metrics", dependencies=[Depends(require_admin)])
+async def get_admin_dashboard():
+    data = await AnalyticsService.get_admin_dashboard_metrics()
+    return {"status": "success", "data": data}
+
+@router.get("/analytics", dependencies=[Depends(require_admin)])
+async def get_admin_analytics():
+    data = await AnalyticsService.get_admin_system_analytics()
+    return {"status": "success", "data": data}

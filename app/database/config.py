@@ -1,4 +1,5 @@
 import os
+import pymongo
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 
@@ -37,7 +38,14 @@ async def connect_to_mongo():
     try:
         db_instance.client = AsyncIOMotorClient(MONGO_URL)
         db_instance.db = db_instance.client.get_default_database(MONGO_DB_NAME)
-        print("Đã kết nối thành công với MongoDB!")
+        
+        await db_instance.db[Collections.AUDIT_LOGS].create_index(
+            [("created_at", pymongo.ASCENDING)],
+            expireAfterSeconds=7776000,
+            name="ttl_90_days_audit_logs"
+        )
+        
+        print("Đã kết nối thành công với MongoDB và thiết lập TTL Index!")
     except Exception as e:
         print(f"Lỗi kết nối MongoDB: {e}")
 
