@@ -181,24 +181,28 @@ async def update_company_settings(
     if current_user.role != UserRole.HR_OWNER.value:
         raise HTTPException(status_code=403, detail="Chỉ HR Owner mới được phép cập nhật thông tin công ty")
 
+    current_company = await CompanyRepository.get_by_id(current_user.company_id)
+    if not current_company:
+        raise HTTPException(status_code=404, detail="Không tìm thấy dữ liệu công ty")
+        
+    if current_company.get("owner_user_id") and str(current_company.get("owner_user_id")) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Từ chối truy cập: Chỉ người tạo (Owner gốc) mới được quyền sửa thông tin công ty.")
+
     update_data = {"updated_at": datetime.now(timezone.utc)}
 
-    allowed_fields = ["tax_code", "industry", "size", "website", "address", 
-                       "license_file_url", "name", "logo_url", "banner_url", "location"]
-    for field in allowed_fields:
-        if field in payload:
-            update_data[field] = payload[field]
+    allowed_string_fields = ["tax_code", "industry", "size", "website", "address", "license_file_url", "name", "logo_url", "banner_url"]
+    for field in allowed_string_fields:
+        if field in payload and payload[field] is not None:
+            update_data[field] = str(payload[field]).strip()
 
-    if "location" in update_data:
+    if "location" in payload and payload["location"] is not None:
         try:
-            update_data["location"] = LocationDetail(**update_data["location"]).model_dump()
+            update_data["location"] = LocationDetail(**payload["location"]).model_dump()
         except ValidationError as e:
             raise HTTPException(status_code=422, detail=f"Dữ liệu địa điểm không hợp lệ: {e}")
 
-    current_company = await CompanyRepository.get_by_id(current_user.company_id)
-
-    tax_code_changed = "tax_code" in payload and payload["tax_code"] != current_company.get("tax_code")
-    license_changed = "license_file_url" in payload and payload["license_file_url"] != current_company.get("license_file_url")
+    tax_code_changed = "tax_code" in update_data and update_data["tax_code"] != current_company.get("tax_code")
+    license_changed = "license_file_url" in update_data and update_data["license_file_url"] != current_company.get("license_file_url")
 
     if tax_code_changed or license_changed:
         update_data["status"] = CompanyStatus.PENDING_VERIFICATION.value
@@ -220,9 +224,16 @@ async def invite_hr_member(
         raise HTTPException(status_code=403, detail="Chỉ HR Owner mới có quyền mời thành viên")
         
     company = await CompanyRepository.get_by_id(current_user.company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Không tìm thấy dữ liệu công ty")
+
+    if company.get("owner_user_id") and str(company.get("owner_user_id")) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Từ chối truy cập: Chỉ người tạo (Owner gốc) mới được quyền mời thành viên.")
+        
     user = await UserRepository.get_by_id(current_user.id)
     
-    existing_user = await UserRepository.find_one({"email": email})
+    safe_email = str(email).strip()
+    existing_user = await UserRepository.find_one({"email": safe_email})
     if existing_user:
         raise HTTPException(status_code=400, detail="Email này đã có tài khoản trên hệ thống")
         

@@ -13,7 +13,7 @@ from app.repositories.application_repository import ApplicationRepository
 from app.repositories.cv_repository import CVRepository
 
 from app.services.nlp_engine import score_cv
-from app.services.vector_engine import compress_jd_data, get_embedding
+from app.services.vector_engine import compress_jd_data, get_embedding, get_top_contributing_sentences
 from app.services.audit_service import log_action
 from app.schemas.common_schema import AuditAction
 
@@ -21,23 +21,32 @@ router = APIRouter(prefix="/api/v1/jobs", tags=["Job Management & Ranking"])
 
 async def rescore_all_applications_for_job(job_id: str, jd_data: dict):
     applications = await ApplicationRepository.find_all({"job_id": job_id}, limit=None)
+    jd_search_text = jd_data.get("jd_search_text", "")
     
     for app in applications:
-        cv_id = app["cv_id"]
+        cv_id = app.get("cv_snapshot", {}).get("cv_document_id")
+        if not cv_id:
+            continue
+            
         cv_record = await CVRepository.get_by_id(cv_id)
         if not cv_record:
             continue
             
+        raw_text = cv_record.get("raw_text", "")
+        top_sentences = get_top_contributing_sentences(raw_text, jd_search_text)
+            
         cv_data_for_scoring = {
-            "raw_text": cv_record.get("raw_text", ""),
-            "word_count": len((cv_record.get("raw_text", "") or "").split()),
+            "raw_text": raw_text,
+            "word_count": len((raw_text or "").split()),
             "skills": cv_record.get("extracted_skills", []),
             "years_of_experience": cv_record.get("candidate_info", {}).get("years_of_experience", 0),
             "skill_experience": cv_record.get("candidate_info", {}).get("skill_experience", {}),
             "education_level": cv_record.get("candidate_info", {}).get("education_level", "Không đề cập"),
             "job_hops": cv_record.get("candidate_info", {}).get("job_hops", 1),
             "gap_months": cv_record.get("candidate_info", {}).get("gap_months", 0),
-            "cv_vector": cv_record.get("cv_vector_ref", [])
+            "cv_vector": cv_record.get("cv_vector_ref", []),
+            "fraud_analysis": cv_record.get("candidate_info", {}).get("fraud_analysis", {}),
+            "top_sentences": top_sentences
         }
         
         new_score = score_cv(cv_data_for_scoring, jd_data)

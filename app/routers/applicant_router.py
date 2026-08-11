@@ -31,7 +31,6 @@ async def require_applicant(current_user: CurrentUser = Depends(get_current_user
     return current_user
 
 def _prepare_cv_for_scoring(cv_doc: dict, job: dict) -> dict:
-    """Helper function giúp dọn dẹp nợ kỹ thuật (Lặp code) khi format CV payload cho AI"""
     raw_text = cv_doc.get("raw_text", "")
     top_sentences = get_top_contributing_sentences(raw_text, job.get("jd_search_text", ""))
     return {
@@ -298,6 +297,19 @@ async def apply_to_job(
     if not job:
         raise HTTPException(status_code=404, detail="Không tìm thấy vị trí tuyển dụng hoặc đã đóng")
         
+    deadline = job.get("deadline")
+    if deadline:
+        now_utc = datetime.now(timezone.utc)
+        deadline_dt = datetime.fromisoformat(deadline.replace("Z", "+00:00")) if isinstance(deadline, str) else deadline
+        if deadline_dt.tzinfo is None:
+            deadline_dt = deadline_dt.replace(tzinfo=timezone.utc)
+            
+        if now_utc > deadline_dt:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Chiến dịch đã hết hạn vào {deadline_dt.strftime('%d/%m/%Y %H:%M')}. Bạn không thể ứng tuyển."
+            )
+        
     if await ApplicationRepository.find_one({"applicant_user_id": current_applicant.id, "job_id": job_id}):
         raise HTTPException(status_code=400, detail="Bạn đã nộp hồ sơ cho vị trí này rồi!")
 
@@ -305,7 +317,6 @@ async def apply_to_job(
     if not cv_doc:
         raise HTTPException(status_code=404, detail="Không tìm thấy CV trong thư viện cá nhân")
 
-    # Sử dụng Helper Function để tái cấu trúc
     cv_data_for_scoring = _prepare_cv_for_scoring(cv_doc, job)
     scoring_result = score_cv(cv_data_for_scoring, job)
 
@@ -361,7 +372,6 @@ async def self_score_cv(
     if not cv_doc:
         raise HTTPException(status_code=404, detail="Không tìm thấy CV trong thư viện cá nhân")
 
-    # Tái sử dụng Helper Function
     cv_data_for_scoring = _prepare_cv_for_scoring(cv_doc, job)
     scoring_result = score_cv(cv_data_for_scoring, job)
 
