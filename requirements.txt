@@ -32,5 +32,8 @@ slowapi
 hiredis
 redis
 
+# --- Schedulers & Background Tasks ---
+apscheduler
+
 # --- Cloud Storage ---
 cloudinary==1.38.0

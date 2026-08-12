@@ -12,9 +12,7 @@ from app.repositories.application_repository import ApplicationRepository
 from app.repositories.cv_repository import CVRepository
 from app.repositories.notification_repository import NotificationRepository
 
-from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
-from app.services.vector_engine import compress_cv_data, get_cv_embeddings, get_top_contributing_sentences
-from app.services.document_forensics import detect_hidden_text
+from app.services.ai_scoring_service import AIScoringService
 from app.services.audit_service import log_action
 from app.core.security import require_hr, require_hr_or_admin, get_scope_filter, CurrentUser
 from app.middleware.rate_limit import limiter
@@ -60,18 +58,13 @@ async def upload_cv_to_pool(
         raise HTTPException(status_code=400, detail="Dung lượng file vượt quá 5MB giới hạn")
     
     try:
-        raw_text = await extract_text(file, content)
+        raw_text, cv_data, fraud_result, cv_vector = await AIScoringService.process_uploaded_cv(file, content, file.filename)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Hệ thống không thể đọc được file này: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Hệ thống không thể xử lý file này: {str(e)}")
         
     if not raw_text.strip():
         raise HTTPException(status_code=400, detail="Không thể trích xuất văn bản.")
 
-    fraud_result = None
-    if file.filename.lower().endswith((".pdf", ".docx")):
-        fraud_result = detect_hidden_text(content, file.filename)
-
-    cv_data = await analyze_cv_text(raw_text)
     candidate_email = cv_data.get("email")
     
     if candidate_email:
@@ -85,9 +78,6 @@ async def upload_cv_to_pool(
             }
         
     file_url = await upload_file_to_cloudinary(content, file.filename)
-        
-    compressed_text = compress_cv_data(raw_text, cv_data, cv_data.get("skills", []))
-    cv_vector = await get_cv_embeddings(compressed_text)
     
     pool_record = {
         "filename": file.filename,
@@ -162,25 +152,8 @@ async def map_cv_to_job(
         raise HTTPException(status_code=400, detail="Hồ sơ này đã được đưa vào chiến dịch này rồi!")
 
     jd_search_text = jd_data.get("jd_search_text", "")
-    raw_text = cv_record.get("raw_text", "")
-
-    top_sentences = get_top_contributing_sentences(raw_text, jd_search_text)
-
-    cv_data_for_scoring = {
-        "raw_text": cv_record.get("raw_text", ""),
-        "word_count": len((cv_record.get("raw_text", "") or "").split()),
-        "skills": cv_record.get("extracted_skills", []),
-        "years_of_experience": cv_record.get("candidate_info", {}).get("years_of_experience", 0),
-        "skill_experience": cv_record.get("candidate_info", {}).get("skill_experience", {}),
-        "education_level": cv_record.get("candidate_info", {}).get("education_level", "Không đề cập"),
-        "job_hops": cv_record.get("candidate_info", {}).get("job_hops", 1),       
-        "gap_months": cv_record.get("candidate_info", {}).get("gap_months", 0),   
-        "cv_vector": cv_record.get("cv_vector_ref", []),
-        "fraud_analysis": cv_record.get("candidate_info", {}).get("fraud_analysis", {}),
-        "top_sentences": top_sentences
-    }
-
-    scoring_result = score_cv(cv_data_for_scoring, jd_data)
+    
+    scoring_result, top_sentences = AIScoringService.prepare_and_score_cv(cv_record, jd_data, jd_search_text)
 
     cv_snapshot = {
         "cv_document_id": cv_id,
@@ -259,24 +232,9 @@ async def map_multiple_cvs_to_job(
                 errors.append(f"CV {cv_record.get('filename')} đã tồn tại trong chiến dịch này")
                 continue
 
-            raw_text = cv_record.get("raw_text", "")
-            top_sentences = get_top_contributing_sentences(raw_text, jd_search_text)
-
-            cv_data_for_scoring = {
-                "raw_text": raw_text,
-                "word_count": len(raw_text.split()),
-                "skills": cv_record.get("extracted_skills", []),
-                "years_of_experience": cv_record.get("candidate_info", {}).get("years_of_experience", 0),
-                "skill_experience": cv_record.get("candidate_info", {}).get("skill_experience", {}),
-                "education_level": cv_record.get("candidate_info", {}).get("education_level", "Không đề cập"),
-                "job_hops": cv_record.get("candidate_info", {}).get("job_hops", 1),       
-                "gap_months": cv_record.get("candidate_info", {}).get("gap_months", 0),   
-                "cv_vector": cv_record.get("cv_vector_ref", []),
-                "fraud_analysis": cv_record.get("candidate_info", {}).get("fraud_analysis", {}),
-                "top_sentences": top_sentences
-            }
-
-            scoring_result = score_cv(cv_data_for_scoring, jd_data)
+            jd_search_text = jd_data.get("jd_search_text", "")
+            
+            scoring_result, top_sentences = AIScoringService.prepare_and_score_cv(cv_record, jd_data, jd_search_text)
 
             cv_snapshot = {
                 "cv_document_id": cv_id,
