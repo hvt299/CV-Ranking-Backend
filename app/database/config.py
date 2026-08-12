@@ -27,10 +27,13 @@ class Collections:
     REFRESH_TOKENS = "refresh_tokens"
     SUBSCRIPTION_PLANS = "subscription_plans"
     APPLICANT_PROFILES = "applicant_profiles"
-    INTERVIEW_FEEDBACKS = "interview_feedbacks"
     COMPANY_REVIEWS = "company_reviews"
     SAVED_JOBS = "saved_jobs"
-    JOB_ALERTS = "job_alerts"
+    SAVED_COMPANIES = "saved_companies"
+    TALENT_POOLS = "talent_pools"
+    MATCHING_PREFERENCES = "matching_preferences"
+    INTERVIEWS = "interviews"
+    INTERVIEW_FEEDBACKS = "interview_feedbacks"
 
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "cv-ranking")
 

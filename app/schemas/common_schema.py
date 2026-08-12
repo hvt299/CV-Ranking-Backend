@@ -79,7 +79,16 @@ class RecommendationEnum(str, Enum):
     HIRE = "hire"
     NO_HIRE = "no_hire"
     MAYBE = "maybe"
+    STRONG_HIRE = "strong_hire"
 
-class AlertFrequency(str, Enum):
-    DAILY = "daily"
-    WEEKLY = "weekly"
+class RemoteFlexibilityEnum(str, Enum):
+    REMOTE_ONLY = "remote_only"
+    HYBRID = "hybrid"
+    ONSITE_ONLY = "onsite_only"
+    ANY = "any"
+
+class InterviewStatus(str, Enum):
+    SCHEDULED = "scheduled"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    RESCHEDULED = "rescheduled"

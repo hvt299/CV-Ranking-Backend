@@ -6,11 +6,13 @@ from pydantic import BaseModel
 from app.database.config import Collections
 from app.schemas.application_schema import ApplicationUpdate
 from app.schemas.common_schema import ApplicationStatus, ApplicationSource, NotificationType, NotificationReadStatus, AuditAction
+from app.schemas.user_interaction_schema import TalentPoolCreate
 from app.repositories.job_repository import JobRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.cv_repository import CVRepository
 from app.repositories.notification_repository import NotificationRepository
+from app.repositories.user_interactions_repository import TalentPoolRepository
 
 from app.services.ai_scoring_service import AIScoringService
 from app.services.audit_service import log_action
@@ -512,3 +514,34 @@ async def get_ai_interview_questions(app_id: str, scope_filter: dict = Depends(g
     await ApplicationRepository.update_by_query(filter_query, {"$set": {"ai_interview_questions": questions, "updated_at": datetime.now(timezone.utc)}})
 
     return {"status": "success", "data": questions}
+
+@router.post("/talent-pool/bookmark")
+async def bookmark_candidate_to_pool(
+    payload: TalentPoolCreate,
+    current_user: CurrentUser = Depends(require_hr)
+):
+    existing = await TalentPoolRepository.find_one({
+        "applicant_user_id": payload.applicant_user_id,
+        "company_id": current_user.company_id
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="Ứng viên này đã có trong Talent Pool của công ty")
+
+    record = payload.model_dump()
+    record.update({
+        "hr_user_id": current_user.id,
+        "company_id": current_user.company_id,
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc)
+    })
+    
+    _id = await TalentPoolRepository.create(record)
+    return {"status": "success", "message": "Đã lưu ứng viên vào Talent Pool", "id": _id}
+
+@router.get("/talent-pool/bookmarked", dependencies=[Depends(require_hr)])
+async def get_bookmarked_candidates(current_user: CurrentUser = Depends(require_hr)):
+    records = await TalentPoolRepository.get_by_company_id(current_user.company_id)
+    for r in records:
+        r["id"] = str(r["_id"])
+        del r["_id"]
+    return records

@@ -7,10 +7,12 @@ from datetime import datetime, timezone
 from app.core.security import get_current_user, CurrentUser
 from app.database.config import Collections
 from app.schemas.common_schema import UserRole, JobStatus, ApplicationStatus, ApplicationSource, NotificationReadStatus
+from app.schemas.user_interaction_schema import SavedCompanyCreate, MatchingPreferencesCreate, MatchingPreferencesUpdate
 from app.repositories.job_repository import JobRepository
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.cv_repository import CVRepository
 from app.repositories.notification_repository import NotificationRepository
+from app.repositories.user_interactions_repository import SavedCompanyRepository, MatchingPreferencesRepository
 
 from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
 from app.services.vector_engine import compress_cv_data, get_cv_embeddings, get_top_contributing_sentences
@@ -393,3 +395,87 @@ async def delete_cv_from_library(cv_id: str, current_applicant: CurrentUser = De
     await CVRepository.delete(cv_id, scope_filter={"owner_user_id": current_applicant.id})
         
     return {"status": "success", "message": "Đã xóa CV khỏi thư viện cá nhân"}
+
+@router.post("/saved-companies")
+async def save_company(
+    payload: SavedCompanyCreate,
+    current_applicant: CurrentUser = Depends(require_applicant)
+):
+    is_saved = await SavedCompanyRepository.check_saved(current_applicant.id, payload.company_id)
+    if is_saved:
+        raise HTTPException(status_code=400, detail="Bạn đã theo dõi công ty này rồi")
+
+    record = {
+        "company_id": payload.company_id,
+        "applicant_user_id": current_applicant.id,
+        "created_at": datetime.now(timezone.utc)
+    }
+    _id = await SavedCompanyRepository.create(record)
+    return {"status": "success", "message": "Đã theo dõi công ty", "id": _id}
+
+@router.get("/saved-companies")
+async def get_saved_companies(current_applicant: CurrentUser = Depends(require_applicant)):
+    records = await SavedCompanyRepository.get_by_applicant_id(current_applicant.id)
+    for r in records:
+        r["id"] = str(r["_id"])
+        del r["_id"]
+    return records
+
+@router.delete("/saved-companies/{company_id}")
+async def unsave_company(
+    company_id: str,
+    current_applicant: CurrentUser = Depends(require_applicant)
+):
+    deleted = await SavedCompanyRepository.delete_many(
+        {"applicant_user_id": current_applicant.id, "company_id": company_id}
+    )
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="Chưa theo dõi công ty này")
+    return {"status": "success", "message": "Đã hủy theo dõi công ty"}
+
+@router.post("/matching-preferences")
+async def setup_matching_preferences(
+    payload: MatchingPreferencesCreate,
+    current_applicant: CurrentUser = Depends(require_applicant)
+):
+    await MatchingPreferencesRepository.delete_many({"applicant_user_id": current_applicant.id})
+    
+    record = payload.model_dump()
+    record["applicant_user_id"] = current_applicant.id
+    record["is_active"] = True
+    record["created_at"] = datetime.now(timezone.utc)
+    record["updated_at"] = datetime.now(timezone.utc)
+    
+    _id = await MatchingPreferencesRepository.create(record)
+    return {"status": "success", "message": "Đã lưu tiêu chí AI Matching", "id": _id}
+
+@router.patch("/matching-preferences")
+async def update_matching_preferences(
+    payload: MatchingPreferencesUpdate,
+    current_applicant: CurrentUser = Depends(require_applicant)
+):
+    existing_record = await MatchingPreferencesRepository.get_by_applicant_id(current_applicant.id)
+    if not existing_record:
+        raise HTTPException(status_code=404, detail="Chưa có cấu hình AI Matching. Vui lòng thiết lập (POST) trước.")
+    
+    update_data = payload.model_dump(exclude_unset=True)
+    if not update_data:
+        return {"status": "success", "message": "Không có dữ liệu mới để cập nhật"}
+        
+    update_data["updated_at"] = datetime.now(timezone.utc)
+    
+    await MatchingPreferencesRepository.update(
+        doc_id=str(existing_record["_id"]),
+        update_data=update_data
+    )
+    
+    return {"status": "success", "message": "Đã cập nhật tiêu chí AI Matching"}
+
+@router.get("/matching-preferences")
+async def get_matching_preferences(current_applicant: CurrentUser = Depends(require_applicant)):
+    record = await MatchingPreferencesRepository.get_by_applicant_id(current_applicant.id)
+    if not record:
+        return {"status": "success", "data": None}
+    record["id"] = str(record["_id"])
+    del record["_id"]
+    return {"status": "success", "data": record}
