@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, EmailStr
 from typing import Optional, List
 from datetime import datetime
 import re
@@ -43,6 +43,16 @@ class DepartmentCreate(BaseModel):
     description: Optional[str] = None
     head_user_id: Optional[str] = Field(default=None, description="Trưởng phòng")
 
+class DepartmentUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    head_user_id: Optional[str] = None
+
+class DepartmentResponse(DepartmentCreate):
+    id: str
+    created_at: datetime
+    updated_at: datetime
+
 class CompanyResponse(CompanyCreate):
     id: str
     status: CompanyStatus
@@ -52,3 +62,12 @@ class CompanyResponse(CompanyCreate):
     review_count: int = Field(default=0)
     created_at: datetime
     updated_at: Optional[datetime] = None
+
+class InviteMemberPayload(BaseModel):
+    email: EmailStr
+    department_id: Optional[str] = Field(default=None, description="ID của phòng ban (tuỳ chọn)")
+    department_roles: List[str] = Field(default=["viewer"], description="Quyền hạn: 'interviewer', 'recruiter', 'viewer'")
+
+class AssignMemberPayload(BaseModel):
+    department_id: Optional[str] = Field(default=None, description="ID phòng ban (Truyền None nếu muốn gỡ nhân sự khỏi phòng)")
+    department_roles: List[str] = Field(default=["viewer"], description="Quyền hạn: 'interviewer', 'recruiter', 'viewer'")

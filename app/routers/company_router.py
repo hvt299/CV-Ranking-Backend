@@ -7,12 +7,13 @@ import jwt
 
 from app.core.security import CurrentUser, require_hr, JWT_SECRET, ALGORITHM
 from app.schemas.common_schema import CompanyStatus, UserRole
-from app.schemas.company_schema import CompanyResponse
+from app.schemas.company_schema import CompanyResponse, InviteMemberPayload,  DepartmentCreate, DepartmentUpdate, DepartmentResponse, AssignMemberPayload
 from app.schemas.shared_schema import LocationDetail
 from app.services.email_service import send_hr_invite_email
 from app.services.analytics_service import AnalyticsService
 from app.repositories.user_repository import UserRepository
 from app.repositories.company_repository import CompanyRepository
+from app.repositories.department_repository import DepartmentRepository
 import re
 from app.database.config import get_db, Collections
 from pydantic import ValidationError
@@ -217,7 +218,7 @@ async def update_company_settings(
 @router.post("/invite", dependencies=[Depends(require_hr)])
 async def invite_hr_member(
     background_tasks: BackgroundTasks,
-    email: str = Body(..., embed=True), 
+    payload: InviteMemberPayload = Body(...), 
     current_user: CurrentUser = Depends(require_hr)
 ):
     if current_user.role != UserRole.HR_OWNER.value:
@@ -229,19 +230,27 @@ async def invite_hr_member(
 
     if company.get("owner_user_id") and str(company.get("owner_user_id")) != str(current_user.id):
         raise HTTPException(status_code=403, detail="Từ chối truy cập: Chỉ người tạo (Owner gốc) mới được quyền mời thành viên.")
+
+    if payload.department_id:
+        from app.repositories.department_repository import DepartmentRepository
+        dept = await DepartmentRepository.get_by_id(payload.department_id)
+        if not dept or dept.get("company_id") != current_user.company_id:
+            raise HTTPException(status_code=400, detail="Phòng ban không tồn tại hoặc không thuộc công ty này")
         
     user = await UserRepository.get_by_id(current_user.id)
     
-    safe_email = str(email).strip()
+    safe_email = str(payload.email).strip()
     existing_user = await UserRepository.find_one({"email": safe_email})
     if existing_user:
         raise HTTPException(status_code=400, detail="Email này đã có tài khoản trên hệ thống")
         
     invite_token = jwt.encode(
         {
-            "email": email, 
+            "email": safe_email, 
             "company_id": current_user.company_id, 
             "role": UserRole.HR_MEMBER.value,
+            "department_id": payload.department_id,
+            "department_roles": payload.department_roles,
             "exp": datetime.now(timezone.utc) + timedelta(days=7)
         },
         JWT_SECRET, algorithm=ALGORITHM
@@ -249,13 +258,13 @@ async def invite_hr_member(
     
     send_hr_invite_email(
         background_tasks, 
-        to=email, 
+        to=safe_email, 
         inviter_name=user.get("full_name", "Quản lý"), 
         company_name=company.get("name", "Công ty"), 
         token=invite_token
     )
     
-    return {"status": "success", "message": f"Đã gửi thư mời thành công đến {email}"}
+    return {"status": "success", "message": f"Đã gửi thư mời thành công đến {safe_email}"}
 
 @router.get("/{company_id}/analytics", dependencies=[Depends(require_hr)])
 async def get_company_analytics(company_id: str, current_user: CurrentUser = Depends(require_hr)):
@@ -305,3 +314,93 @@ async def get_public_company_detail(company_id: str):
     company["view_count"] = current_views + 1
     
     return company
+
+@router.post("/departments", response_model=DepartmentResponse, dependencies=[Depends(require_hr)])
+async def create_department(
+    payload: DepartmentCreate, 
+    current_user: CurrentUser = Depends(require_hr)
+):
+    if current_user.role != UserRole.HR_OWNER.value:
+        raise HTTPException(status_code=403, detail="Chỉ HR Owner mới được tạo phòng ban")
+    
+    record = payload.model_dump()
+    record["company_id"] = current_user.company_id
+    record["created_at"] = datetime.now(timezone.utc)
+    record["updated_at"] = datetime.now(timezone.utc)
+    
+    _id = await DepartmentRepository.create(record)
+    record["id"] = _id
+    return record
+
+@router.get("/departments", response_model=List[DepartmentResponse], dependencies=[Depends(require_hr)])
+async def get_departments(current_user: CurrentUser = Depends(require_hr)):
+    depts = await DepartmentRepository.get_by_company_id(current_user.company_id)
+    for d in depts:
+        d["id"] = str(d["_id"])
+        del d["_id"]
+    return depts
+
+@router.patch("/departments/{dept_id}", dependencies=[Depends(require_hr)])
+async def update_department(
+    dept_id: str,
+    payload: DepartmentUpdate,
+    current_user: CurrentUser = Depends(require_hr)
+):
+    if current_user.role != UserRole.HR_OWNER.value:
+        raise HTTPException(status_code=403, detail="Chỉ HR Owner mới được sửa thông tin phòng ban")
+    
+    dept = await DepartmentRepository.get_by_id(dept_id)
+    if not dept or dept.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy phòng ban hợp lệ")
+        
+    update_data = payload.model_dump(exclude_unset=True)
+    if not update_data:
+        return {"status": "success", "message": "Không có dữ liệu mới để cập nhật"}
+        
+    update_data["updated_at"] = datetime.now(timezone.utc)
+    await DepartmentRepository.update(dept_id, update_data)
+    return {"status": "success", "message": "Đã cập nhật thông tin phòng ban"}
+
+@router.delete("/departments/{dept_id}", dependencies=[Depends(require_hr)])
+async def delete_department(dept_id: str, current_user: CurrentUser = Depends(require_hr)):
+    if current_user.role != UserRole.HR_OWNER.value:
+        raise HTTPException(status_code=403, detail="Chỉ HR Owner mới được xóa phòng ban")
+    
+    dept = await DepartmentRepository.get_by_id(dept_id)
+    if not dept or dept.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy phòng ban hợp lệ")
+        
+    await DepartmentRepository.delete(dept_id)
+    
+    await UserRepository.update_many(
+        {"department_id": dept_id},
+        {"department_id": None, "department_roles": []}
+    )
+    
+    return {"status": "success", "message": "Đã xóa phòng ban và gỡ phân bổ các nhân sự liên quan"}
+
+@router.patch("/members/{user_id}/department", dependencies=[Depends(require_hr)])
+async def assign_member_to_department(
+    user_id: str,
+    payload: AssignMemberPayload,
+    current_user: CurrentUser = Depends(require_hr)
+):
+    if current_user.role != UserRole.HR_OWNER.value:
+        raise HTTPException(status_code=403, detail="Chỉ HR Owner mới được phân bổ nhân sự")
+    
+    target_user = await UserRepository.get_by_id(user_id)
+    if not target_user or target_user.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy nhân sự trong công ty")
+
+    if payload.department_id:
+        dept = await DepartmentRepository.get_by_id(payload.department_id)
+        if not dept or dept.get("company_id") != current_user.company_id:
+            raise HTTPException(status_code=404, detail="Phòng ban không tồn tại hoặc không thuộc công ty này")
+
+    await UserRepository.update(user_id, {
+        "department_id": payload.department_id,
+        "department_roles": payload.department_roles,
+        "updated_at": datetime.now(timezone.utc)
+    })
+
+    return {"status": "success", "message": "Đã cập nhật phân bổ phòng ban cho nhân sự"}
