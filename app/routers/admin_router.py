@@ -142,7 +142,9 @@ async def verify_company(
         "verified_at": datetime.now(timezone.utc)
     }
 
-    if not action.approve:
+    if action.approve:
+        update_data["kyc_approved_at"] = datetime.now(timezone.utc)
+    else:
         update_data["rejection_reason"] = action.rejection_reason
 
     await CompanyRepository.update(company_id, update_data)

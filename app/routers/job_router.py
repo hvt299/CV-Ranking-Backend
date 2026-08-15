@@ -1,12 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, Body, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Body, BackgroundTasks, Query, HTTPException, Depends
 from typing import List
 from datetime import datetime, timezone
+from bson import ObjectId
 
 from app.core.security import CurrentUser, require_hr, require_hr_or_admin, get_scope_filter
 from app.middleware.subscription import verify_job_quota
 from app.database.config import Collections
 from app.schemas.job_schema import JobCreateEnterprise, JobResponse
-from app.schemas.common_schema import JobStatus, UserRole, CompanyStatus
+from app.schemas.common_schema import JobStatus, UserRole, CompanyStatus, AuditAction
 from app.repositories.job_repository import JobRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.application_repository import ApplicationRepository
@@ -15,7 +16,7 @@ from app.repositories.cv_repository import CVRepository
 from app.services.nlp_engine import score_cv
 from app.services.vector_engine import compress_jd_data, get_embedding, get_top_contributing_sentences
 from app.services.audit_service import log_action
-from app.schemas.common_schema import AuditAction
+from app.services.analytics_service import AnalyticsService
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["Job Management & Ranking"])
 
@@ -120,9 +121,6 @@ async def get_my_jobs(scope_filter: dict = Depends(get_scope_filter)):
         result.append(job)
         
     return result
-
-from bson import ObjectId
-from fastapi import HTTPException, Depends
 
 @router.get("/{job_id}", response_model=JobResponse, dependencies=[Depends(require_hr_or_admin)])
 async def get_job_detail(job_id: str, scope_filter: dict = Depends(get_scope_filter)):
@@ -260,9 +258,6 @@ async def get_job_ranking(job_id: str, scope_filter: dict = Depends(get_scope_fi
         "leaderboard": leaderboard
     }
 
-from fastapi import Query
-from app.services.analytics_service import AnalyticsService
-
 @router.get("/dashboard/metrics", dependencies=[Depends(require_hr)])
 async def get_dashboard_metrics(
     scope: str = Query("company", description="Góc nhìn: 'company' (Owner) hoặc 'me' (Member)"),
@@ -339,6 +334,10 @@ async def get_public_job_detail(job_id: str):
         
     job = jobs[0]
     job["id"] = str(job["_id"])
+    
+    current_views = job.get("view_count", 0)
+    await JobRepository.update_custom({"_id": obj_id}, {"$inc": {"view_count": 1}})
+    job["view_count"] = current_views + 1
     
     job["company_name"] = job.get("company_info", {}).get("name", "Công ty Ẩn danh")
     job.pop("company_info", None)

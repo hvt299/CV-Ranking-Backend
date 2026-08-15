@@ -1,9 +1,11 @@
 from pydantic import BaseModel, Field
 from typing import Optional
+from datetime import datetime
 
 class KYCDocument(BaseModel):
     document_type: str = Field(..., description="Loại giấy tờ (VD: Giấy phép KD, CCCD)")
     file_url: str = Field(..., description="URL file trên Cloudinary")
+    submitted_at: datetime = Field(default_factory=datetime.utcnow)
 
 class LocationDetail(BaseModel):
     country: str = Field(default="Việt Nam")

@@ -56,8 +56,15 @@ class DepartmentResponse(DepartmentCreate):
 class CompanyResponse(CompanyCreate):
     id: str
     status: CompanyStatus
+    
+    kyc_submitted_at: Optional[datetime] = None
+    kyc_approved_at: Optional[datetime] = None
     verified_at: Optional[datetime] = None
+    
     view_count: int = Field(default=0)
+    profile_view_count: int = Field(default=0, description="Số lượt ứng viên chủ động xem trang thông tin công ty")
+    follower_count: int = Field(default=0, description="Tổng số lượt lưu công ty từ bảng SavedCompany")
+    
     avg_rating: float = Field(default=0.0)
     review_count: int = Field(default=0)
     created_at: datetime

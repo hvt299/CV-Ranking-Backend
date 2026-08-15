@@ -10,10 +10,16 @@ class CompanyDB(CompanyCreate):
     
     status: CompanyStatus = Field(default=CompanyStatus.PENDING_VERIFICATION)
     rejection_reason: Optional[str] = None
+    
+    kyc_submitted_at: Optional[datetime] = None
+    kyc_approved_at: Optional[datetime] = None
     verified_at: Optional[datetime] = None
     verified_by_admin_id: Optional[str] = None
     
     view_count: int = Field(default=0)
+    profile_view_count: int = Field(default=0)
+    follower_count: int = Field(default=0)
+    
     avg_rating: float = Field(default=0.0)
     review_count: int = Field(default=0)
     

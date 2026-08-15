@@ -13,7 +13,7 @@ cloudinary.config(
     api_secret=os.getenv("CLOUDINARY_API_SECRET")
 )
 
-async def upload_file_to_cloudinary(file_bytes: bytes, filename: str) -> str:
+async def upload_file_to_cloudinary(file_bytes: bytes, filename: str, target_folder: str = "ats_cv_library") -> str:
     try:
         random_suffix = os.urandom(4).hex()
         safe_filename = filename.split('.')[0][:30]
@@ -21,13 +21,13 @@ async def upload_file_to_cloudinary(file_bytes: bytes, filename: str) -> str:
         result = cloudinary.uploader.upload(
             file_bytes,
             resource_type="auto", 
-            folder="ats_cv_library",
+            folder=target_folder,
             public_id=f"{safe_filename}_{random_suffix}"
         )
         return result.get("secure_url")
     except Exception as e:
         logger.error(f"Lỗi khi upload lên Cloudinary: {e}")
-        raise Exception("Không thể lưu trữ file CV vào Cloudinary lúc này")
+        raise Exception("Không thể lưu trữ file vào Cloudinary lúc này")
     
 async def delete_file_from_cloudinary(file_url: str) -> bool:
     try:

@@ -232,7 +232,6 @@ async def invite_hr_member(
         raise HTTPException(status_code=403, detail="Từ chối truy cập: Chỉ người tạo (Owner gốc) mới được quyền mời thành viên.")
 
     if payload.department_id:
-        from app.repositories.department_repository import DepartmentRepository
         dept = await DepartmentRepository.get_by_id(payload.department_id)
         if not dept or dept.get("company_id") != current_user.company_id:
             raise HTTPException(status_code=400, detail="Phòng ban không tồn tại hoặc không thuộc công ty này")
@@ -310,8 +309,15 @@ async def get_public_company_detail(company_id: str):
     company["id"] = str(company["_id"])
     
     current_views = company.get("view_count", 0)
-    await CompanyRepository.update(company_id, {"view_count": current_views + 1})
+    current_profile_views = company.get("profile_view_count", 0)
+    
+    await CompanyRepository.update_custom(
+        {"_id": obj_id},
+        {"$inc": {"view_count": 1, "profile_view_count": 1}}
+    )
+    
     company["view_count"] = current_views + 1
+    company["profile_view_count"] = current_profile_views + 1
     
     return company
 

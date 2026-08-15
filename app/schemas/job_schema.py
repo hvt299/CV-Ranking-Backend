@@ -97,5 +97,7 @@ class JobResponse(JobCreateEnterprise):
     status: JobStatus
     created_at: datetime
     updated_at: Optional[datetime] = None
+    
     view_count: Optional[int] = Field(default=0)
+    save_count: Optional[int] = Field(default=0, description="Số lượt ứng viên bookmark job này")
     num_applications: Optional[int] = Field(default=0)

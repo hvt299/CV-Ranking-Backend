@@ -6,13 +6,14 @@ from datetime import datetime, timezone
 
 from app.core.security import get_current_user, CurrentUser
 from app.database.config import Collections
-from app.schemas.common_schema import UserRole, JobStatus, ApplicationStatus, ApplicationSource, NotificationReadStatus
+from app.schemas.common_schema import UserRole, JobStatus, ApplicationStatus, ApplicationSource, NotificationReadStatus, NotificationType, NotificationActorType, NotificationActionType
 from app.schemas.user_interaction_schema import SavedCompanyCreate, MatchingPreferencesCreate, MatchingPreferencesUpdate
 from app.repositories.job_repository import JobRepository
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.cv_repository import CVRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.user_interactions_repository import SavedCompanyRepository, MatchingPreferencesRepository
+from app.repositories.company_repository import CompanyRepository
 
 from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
 from app.services.vector_engine import compress_cv_data, get_cv_embeddings, get_top_contributing_sentences
@@ -346,7 +347,6 @@ async def apply_to_job(
 
     hr_owner_id = job.get("created_by_user_id")
     if hr_owner_id:
-        from app.schemas.common_schema import NotificationType, NotificationActorType, NotificationActionType
         await NotificationRepository.create({
             "recipient_user_id": hr_owner_id,
             "recipient_type": NotificationActorType.HR_USER.value,
@@ -430,6 +430,12 @@ async def save_company(
         "created_at": datetime.now(timezone.utc)
     }
     _id = await SavedCompanyRepository.create(record)
+    
+    await CompanyRepository.update_custom(
+        {"_id": ObjectId(payload.company_id)}, 
+        {"$inc": {"follower_count": 1}}
+    )
+    
     return {"status": "success", "message": "Đã theo dõi công ty", "id": _id}
 
 @router.get("/saved-companies")
@@ -450,6 +456,12 @@ async def unsave_company(
     )
     if deleted == 0:
         raise HTTPException(status_code=404, detail="Chưa theo dõi công ty này")
+        
+    await CompanyRepository.update_custom(
+        {"_id": ObjectId(company_id)}, 
+        {"$inc": {"follower_count": -deleted}}
+    )
+    
     return {"status": "success", "message": "Đã hủy theo dõi công ty"}
 
 @router.post("/matching-preferences")

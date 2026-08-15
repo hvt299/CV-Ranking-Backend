@@ -16,6 +16,7 @@ class JobDB(JobCreateEnterprise):
     jd_vector_ref: Optional[List[float]] = None
     
     view_count: int = Field(default=0)
+    save_count: int = Field(default=0)
     num_applications: int = Field(default=0)
     
     created_at: datetime = Field(default_factory=utc_now)

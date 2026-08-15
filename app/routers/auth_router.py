@@ -61,6 +61,11 @@ class RegisterRequest(UserCreate):
     website: Optional[str] = Field(default=None)
     invite_token: Optional[str] = Field(default=None, description="Token từ email mời")
 
+class ExternalCVLinkDTO(BaseModel):
+    provider: str
+    url: str
+    is_primary: bool = False
+
 class ProfileUpdate(BaseModel):
     full_name: Optional[str] = None
     avatar: Optional[str] = None
@@ -69,8 +74,16 @@ class ProfileUpdate(BaseModel):
     job_title_internal: Optional[str] = None
     extension_phone: Optional[str] = None
     current_location: Optional[LocationDetail] = None
-    github: Optional[str] = None
     linkedin: Optional[str] = None
+    portfolio: Optional[list] = None
+    industry_specific_data: Optional[dict] = None
+    external_cv_links: Optional[list[ExternalCVLinkDTO]] = None
+    is_searchable: Optional[bool] = None
+    
+    headline: Optional[str] = None
+    expected_salary_min: Optional[int] = None
+    expected_salary_max: Optional[int] = None
+    
     headline: Optional[str] = None
     expected_salary_min: Optional[int] = None
     expected_salary_max: Optional[int] = None
@@ -635,10 +648,21 @@ async def update_profile(profile_data: ProfileUpdate, current_user: CurrentUser 
 
     if user.get("role") == UserRole.APPLICANT.value:
         profile_update = {}
-        for field in ("github", "linkedin", "headline", "expected_salary_min", "expected_salary_max"):
+        
+        applicant_fields = (
+            "linkedin", "portfolio", 
+            "industry_specific_data", "headline", 
+            "expected_salary_min", "expected_salary_max", 
+            "is_searchable"
+        )
+        
+        for field in applicant_fields:
             value = getattr(profile_data, field, None)
             if value is not None:
                 profile_update[field] = value
+                
+        if profile_data.external_cv_links is not None:
+            profile_update["external_cv_links"] = [link.model_dump() for link in profile_data.external_cv_links]
                 
         if profile_data.current_location is not None:
             profile_update["current_location"] = profile_data.current_location.model_dump(exclude_unset=True)
@@ -775,7 +799,7 @@ async def anonymize_account(current_user: CurrentUser = Depends(get_current_user
     if user.get("role") == UserRole.APPLICANT.value:
         await ApplicantProfileRepository.update_custom(
             {"user_id": current_user.id},
-            {"$set": {"deleted_at": utc_now()}, "$unset": {"phone": "", "address": "", "bio": "", "github": "", "linkedin": ""}}
+            {"$set": {"deleted_at": utc_now()}, "$unset": {"phone": "", "address": "", "bio": "", "linkedin": "", "industry_specific_data": ""}}
         )
     
     await RefreshTokenRepository.delete_many({"user_id": current_user.id})
