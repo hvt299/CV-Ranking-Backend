@@ -1,25 +1,29 @@
 from pydantic import BaseModel, Field
-from typing import Optional
-from app.schemas.common_schema import NotificationType, ApplicationStatus
+from typing import Optional, Dict, Any
+from app.schemas.common_schema import NotificationType, NotificationActorType, NotificationActionType
 
 class NotificationCreate(BaseModel):
-    recipient_user_id: str
+    recipient_user_id: str = Field(..., description="ID người nhận")
+    recipient_type: NotificationActorType = Field(...)
     
-    application_id: Optional[str] = None
+    sender_id: Optional[str] = Field(default=None, description="ID người gửi (None nếu là SYSTEM)")
+    sender_type: NotificationActorType = Field(default=NotificationActorType.SYSTEM)
+    
+    action_type: NotificationActionType = Field(default=NotificationActionType.GENERAL_ALERT)
     
     title: str
     message: str
     type: NotificationType = Field(default=NotificationType.INFO)
     
-    job_title_snapshot: Optional[str] = None
-    application_status_snapshot: Optional[ApplicationStatus] = None
-    
-    related_entity_type: Optional[str] = Field(
+    entity_ref: Optional[Dict[str, Any]] = Field(
         default=None, 
-        description="VD: 'company' | 'job' | 'application' | 'user'"
+        description="Tham chiếu. VD: {'type': 'job', 'id': '123'}"
     )
-    related_entity_id: Optional[str] = None
+    payload: Optional[Dict[str, Any]] = Field(
+        default=None, 
+        description="Dữ liệu linh hoạt cho UI. VD: {'job_title': 'Dev', 'status': 'interview'}"
+    )
     action_url: Optional[str] = Field(
         default=None, 
-        description="Deep-link để Frontend điều hướng trực tiếp khi click"
+        description="Deep-link điều hướng"
     )

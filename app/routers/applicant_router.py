@@ -342,7 +342,26 @@ async def apply_to_job(
         "applied_at": datetime.now(timezone.utc),
         "cover_letter": payload.cover_letter
     }
-    await ApplicationRepository.create(app_record)
+    app_id = await ApplicationRepository.create(app_record)
+
+    hr_owner_id = job.get("created_by_user_id")
+    if hr_owner_id:
+        from app.schemas.common_schema import NotificationType, NotificationActorType, NotificationActionType
+        await NotificationRepository.create({
+            "recipient_user_id": hr_owner_id,
+            "recipient_type": NotificationActorType.HR_USER.value,
+            "sender_id": current_applicant.id,
+            "sender_type": NotificationActorType.APPLICANT.value,
+            "action_type": NotificationActionType.NEW_CV_RECEIVED.value,
+            "title": "Hồ sơ ứng tuyển mới",
+            "message": f"Bạn có 1 hồ sơ mới cho vị trí '{job.get('title')}'",
+            "type": NotificationType.INFO.value,
+            "entity_ref": {"type": "application", "id": str(app_id)},
+            "payload": {"job_id": job_id, "applicant_name": cv_snapshot.get("display_name")},
+            "action_url": f"/hr/jobs/{job_id}",
+            "status": NotificationReadStatus.UNREAD.value,
+            "created_at": datetime.now(timezone.utc)
+        })
 
     return {"status": "success", "message": "Nộp hồ sơ thành công bằng CV từ thư viện!"}
 
@@ -479,3 +498,8 @@ async def get_matching_preferences(current_applicant: CurrentUser = Depends(requ
     record["id"] = str(record["_id"])
     del record["_id"]
     return {"status": "success", "data": record}
+
+@router.get("/notifications/unread-count")
+async def get_unread_notifications_count(current_applicant: CurrentUser = Depends(require_applicant)):
+    count = await NotificationRepository.get_unread_count(current_applicant.id)
+    return {"status": "success", "data": {"unread_count": count}}

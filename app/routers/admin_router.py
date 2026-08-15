@@ -6,11 +6,12 @@ import os
 import math
 
 from app.core.security import CurrentUser, require_admin
-from app.schemas.common_schema import UserRole, CompanyStatus, AuditAction
+from app.schemas.common_schema import UserRole, CompanyStatus, AuditAction, NotificationType, NotificationActorType, NotificationActionType, NotificationReadStatus
 from app.schemas.company_schema import CompanyVerifyAction
 from app.repositories.user_repository import UserRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.audit_repository import AuditRepository
+from app.repositories.notification_repository import NotificationRepository
 from app.services.analytics_service import AnalyticsService
 from app.services.audit_service import log_action
 
@@ -162,6 +163,28 @@ async def verify_company(
         before_state=before_state,
         after_state=after_state
     )
+
+    owner_id = existing_company.get("owner_user_id")
+    if owner_id:        
+        notif_action = NotificationActionType.KYC_APPROVED.value if action.approve else NotificationActionType.KYC_REJECTED.value
+        notif_type = NotificationType.SUCCESS.value if action.approve else NotificationType.ERROR.value
+        notif_title = "Xác thực doanh nghiệp thành công" if action.approve else "Xác thực doanh nghiệp thất bại"
+        notif_msg = f"Công ty {existing_company.get('name')} đã được duyệt." if action.approve else f"Từ chối duyệt: {action.rejection_reason}"
+        
+        await NotificationRepository.create({
+            "recipient_user_id": str(owner_id),
+            "recipient_type": NotificationActorType.HR_USER.value,
+            "sender_id": current_admin.id,
+            "sender_type": NotificationActorType.ADMIN.value,
+            "action_type": notif_action,
+            "title": notif_title,
+            "message": notif_msg,
+            "type": notif_type,
+            "entity_ref": {"type": "company", "id": company_id},
+            "payload": {"status": new_status, "reason": action.rejection_reason},
+            "status": NotificationReadStatus.UNREAD.value,
+            "created_at": datetime.now(timezone.utc)
+        })
 
     return {"status": "success", "message": "Đã xử lý trạng thái công ty"}
 

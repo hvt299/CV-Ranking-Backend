@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from app.database.config import Collections
 from app.schemas.application_schema import ApplicationUpdate
-from app.schemas.common_schema import ApplicationStatus, ApplicationSource, NotificationType, NotificationReadStatus, AuditAction
+from app.schemas.common_schema import ApplicationStatus, ApplicationSource, NotificationType, NotificationReadStatus, AuditAction, NotificationActorType, NotificationActionType
 from app.schemas.user_interaction_schema import TalentPoolCreate
 from app.repositories.job_repository import JobRepository
 from app.repositories.company_repository import CompanyRepository
@@ -345,13 +345,20 @@ async def update_application_status(
                 
                 notification = {
                     "recipient_user_id": applicant_user_id,
-                    "application_id": str(current_app["_id"]),
+                    "recipient_type": NotificationActorType.APPLICANT.value,
+                    "sender_id": current_user.id,
+                    "sender_type": NotificationActorType.HR_USER.value,
+                    "action_type": NotificationActionType.APPLICATION_UPDATED.value,
                     "title": title,
                     "message": message,
                     "type": notif_type,
+                    "entity_ref": {"type": "application", "id": str(current_app["_id"])},
+                    "payload": {
+                        "job_title": job.get("title", "Vị trí tuyển dụng") if job else "Vị trí tuyển dụng",
+                        "status": update_data.status.value
+                    },
+                    "action_url": "/applicant/my-applications",
                     "status": NotificationReadStatus.UNREAD.value,
-                    "job_title_snapshot": job.get("title") if job else None,
-                    "application_status_snapshot": update_data.status.value,
                     "created_at": datetime.now(timezone.utc)
                 }
 

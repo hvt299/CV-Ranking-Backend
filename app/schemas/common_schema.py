@@ -92,3 +92,18 @@ class InterviewStatus(str, Enum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     RESCHEDULED = "rescheduled"
+
+class NotificationActorType(str, Enum):
+    SYSTEM = "system"
+    ADMIN = "admin"
+    HR_USER = "hr_user"
+    APPLICANT = "applicant"
+
+class NotificationActionType(str, Enum):
+    KYC_REQUESTED = "kyc_requested"
+    KYC_APPROVED = "kyc_approved"
+    KYC_REJECTED = "kyc_rejected"
+    NEW_CV_RECEIVED = "new_cv_received"
+    INTERVIEW_SCHEDULED = "interview_scheduled"
+    APPLICATION_UPDATED = "application_updated"
+    GENERAL_ALERT = "general_alert"
