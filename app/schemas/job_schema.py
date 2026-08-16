@@ -34,6 +34,11 @@ class SkillDetail(BaseModel):
     name: str = Field(..., description="Tên kỹ năng (Fallback hiển thị)")
     weight: float = Field(default=0.5, ge=0.1, le=1.0)
     min_years: float = Field(default=0.0)
+    is_knockout: bool = Field(default=False, description="Tiêu chí tử thần. Thiếu sẽ bị loại trực tiếp")
+
+class FilterRequirement(BaseModel):
+    name: str = Field(..., description="Tên ngoại ngữ hoặc chứng chỉ")
+    is_knockout: bool = Field(default=False, description="Tiêu chí tử thần. Thiếu sẽ bị loại trực tiếp")
 
 class EducationRequirement(BaseModel):
     min_level: str = Field(default="Không yêu cầu")
@@ -45,16 +50,23 @@ class SalaryRange(BaseModel):
     currency: str = Field(default="VND")
 
 class ScoreWeights(BaseModel):
-    skills_weight: float = Field(default=0.4, ge=0.1, le=0.7)
-    nlp_weight: float = Field(default=0.3, ge=0.1, le=0.7)
-    experience_weight: float = Field(default=0.2, ge=0.05, le=0.5)
-    education_weight: float = Field(default=0.1, ge=0.0, le=0.4)
+    skills_weight: float = Field(..., ge=0.2, le=0.6, description="Trọng số Kỹ năng cốt lõi (20% - 60%)")
+    nlp_weight: float = Field(..., ge=0.1, le=0.5, description="Trọng số Ngữ nghĩa AI (10% - 50%)")
+    experience_weight: float = Field(..., ge=0.05, le=0.4, description="Trọng số Kinh nghiệm (5% - 40%)")
+    education_weight: float = Field(..., ge=0.0, le=0.3, description="Trọng số Học vấn (0% - 30%)")
 
     @field_validator("education_weight")
     def validate_weights_sum_to_one(cls, v, info):
-        total = info.data.get("skills_weight", 0) + info.data.get("nlp_weight", 0) + info.data.get("experience_weight", 0) + v
+        s = info.data.get("skills_weight")
+        n = info.data.get("nlp_weight")
+        e = info.data.get("experience_weight")
+        
+        if s is None or n is None or e is None:
+            return v
+            
+        total = s + n + e + v
         if abs(total - 1.0) > 0.001:
-            raise ValueError(f"Tổng 4 trọng số phải bằng 1.0 (hiện tại: {total}).")
+            raise ValueError(f"Tổng 4 trọng số phải bằng chính xác 1.0 (hiện tại: {total:.2f}).")
         return v
 
 class JobCreateEnterprise(BaseModel):
@@ -71,7 +83,7 @@ class JobCreateEnterprise(BaseModel):
     deadline: Optional[datetime] = None
     probation_period: Optional[str] = Field(default="2 tháng")
     gender_requirement: str = Field(default="Không yêu cầu")
-    languages: List[str] = Field(default=[])
+    languages: List[FilterRequirement] = Field(default=[])
     
     required_skills: List[SkillDetail] = Field(...)
     preferred_skills: List[SkillDetail] = Field(default=[])
@@ -79,7 +91,7 @@ class JobCreateEnterprise(BaseModel):
     min_yoe: float = Field(default=0.0)
     education: Optional[EducationRequirement] = None
     score_weights: Optional[ScoreWeights] = None
-    required_certifications: List[str] = Field(default=[])
+    required_certifications: List[FilterRequirement] = Field(default=[])
     salary: Optional[SalaryRange] = None
     working_hours: Optional[str] = Field(default="08:00 - 17:30, Thứ 2 - Thứ 6")
     location: Optional[LocationDetail] = None
