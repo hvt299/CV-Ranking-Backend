@@ -8,8 +8,16 @@ from app.schemas.common_schema import CompanyStatus
 class CompanyCreate(BaseModel):
     name: str = Field(..., example="TechCorp VN")
     tax_code: str = Field(..., description="Mã số thuế doanh nghiệp — bắt buộc để xác minh")
-    industry: Optional[str] = Field(default=None, description="Ngành nghề chính của công ty (VD: CNTT, Xây dựng, Y tế, Kế toán...)")
+    industries: List[str] = Field(default=["other"], description="Danh sách mã ngành (VD: ['it', 'finance']). Phần tử đầu tiên là Primary Industry.")
     size: Optional[str] = Field(default=None, example="50-100 nhân sự")
+
+    @field_validator("industries")
+    def validate_industries(cls, v):
+        if not v or len(v) == 0:
+            return ["other"]
+        if len(v) > 3:
+            raise ValueError("Chỉ được chọn tối đa 3 ngành nghề cho một công ty.")
+        return v
     website: Optional[str] = None
     
     location: Optional[LocationDetail] = None 

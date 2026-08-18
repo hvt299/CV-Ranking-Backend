@@ -14,11 +14,15 @@ class NoteEntry(BaseModel):
 class ApplicationDB(BaseModel):
     id: str
     job_id: str
+    cv_id: str = Field(..., description="Liên kết tới CV gốc")
     cv_snapshot: CVSnapshot = Field(...)
     applicant_user_id: Optional[str] = None
     source: ApplicationSource
     company_id: str
-    cover_letter: Optional[str] = None
+    
+    cover_letter_text: Optional[str] = None
+    cover_letter_url: Optional[str] = None
+    
     ai_score: Optional[AIScore] = None
     status: ApplicationStatus = Field(default=ApplicationStatus.NEW)
     

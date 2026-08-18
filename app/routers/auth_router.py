@@ -8,17 +8,18 @@ import hashlib
 from fastapi.responses import JSONResponse
 import jwt
 
-from app.schemas.common_schema import UserRole, CompanyStatus, JobStatus, utc_now
+from app.schemas.common_schema import UserRole, CompanyStatus, JobStatus, utc_now, AuditAction, ApplicationSource
 from app.schemas.user_schema import UserCreate
 from app.schemas.auth_schema import UserLogin, Token
 from app.schemas.company_schema import CompanyCreate
 from app.schemas.shared_schema import LocationDetail
-from app.schemas.common_schema import AuditAction
 from app.repositories.user_repository import UserRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.job_repository import JobRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.applicant_profile_repository import ApplicantProfileRepository
+from app.repositories.cv_repository import CVRepository
+from app.repositories.application_repository import ApplicationRepository
 from app.services.audit_service import log_action
 
 from app.core.security import (
@@ -252,12 +253,18 @@ async def register_user(request: Request, response: Response, background_tasks: 
     return {"status": "success", "message": "Đăng ký thành công! Vui lòng kiểm tra email để kích hoạt tài khoản."}
 
 @router.get("/verify")
-async def verify_email(token: str):
+async def verify_email(token: str, background_tasks: BackgroundTasks):
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
-        modified_count = await UserRepository.update(payload.get("sub"), {"is_verified": True})
+        user_id = payload.get("sub")
+        
+        modified_count = await UserRepository.update(user_id, {"is_verified": True})
         if modified_count == 0:
             raise HTTPException(status_code=400, detail="Tài khoản không tồn tại hoặc đã được xác thực.")
+
+        user = await UserRepository.get_by_id(user_id)
+        if user and user.get("role") == UserRole.APPLICANT.value:
+            background_tasks.add_task(merge_ghost_profiles, user_id, user.get("email"))
 
         return {"message": "Xác thực thành công! Tài khoản của bạn đã được kích hoạt."}
     except jwt.PyJWTError:
@@ -323,7 +330,7 @@ async def reset_password(payload: ResetPasswordRequest):
 
 @router.post("/google")
 @limiter.limit("10/minute")
-async def google_login(request: Request, response: Response, social_request: SocialAuthRequest = Body(...)):
+async def google_login(request: Request, response: Response, background_tasks: BackgroundTasks, social_request: SocialAuthRequest = Body(...)):
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -430,8 +437,11 @@ async def google_login(request: Request, response: Response, social_request: Soc
                 await UserRepository.update(str(user["_id"]), update_fields)
                 user.update(update_fields)
 
-        access_token = create_access_token(build_token_payload(user))
-        return {"access_token": access_token, "token_type": "bearer"}
+        if user.get("role") == UserRole.APPLICANT.value or user.get("role") == UserRole.APPLICANT:
+             background_tasks.add_task(merge_ghost_profiles, str(user["_id"]), user.get("email"))
+
+        access_token_jwt = create_access_token(build_token_payload(user))
+        return {"access_token": access_token_jwt, "token_type": "bearer"}
 
     except ValueError:
         raise HTTPException(status_code=401, detail="Token từ Google không hợp lệ hoặc đã hết hạn")
@@ -470,7 +480,7 @@ async def _exchange_linkedin_code(code: str, redirect_uri: str) -> str:
 
 @router.post("/linkedin")
 @limiter.limit("10/minute")
-async def linkedin_login(request: Request, response: Response, social_request: SocialAuthRequest = Body(...)):
+async def linkedin_login(request: Request, response: Response, background_tasks: BackgroundTasks, social_request: SocialAuthRequest = Body(...)):
     try:
         if not social_request.code or not social_request.redirect_uri:
             raise HTTPException(
@@ -586,6 +596,9 @@ async def linkedin_login(request: Request, response: Response, social_request: S
                 update_fields["updated_at"] = datetime.now(timezone.utc)
                 await UserRepository.update(str(user["_id"]), update_fields)
                 user.update(update_fields)
+
+        if user.get("role") == UserRole.APPLICANT.value or user.get("role") == UserRole.APPLICANT:
+             background_tasks.add_task(merge_ghost_profiles, str(user["_id"]), user.get("email"))
 
         access_token_jwt = create_access_token(build_token_payload(user))
         return {"access_token": access_token_jwt, "token_type": "bearer"}
@@ -814,3 +827,31 @@ async def anonymize_account(current_user: CurrentUser = Depends(get_current_user
     )
 
     return {"status": "success", "message": "Tài khoản của bạn đã được xóa và ẩn danh vĩnh viễn."}
+
+async def merge_ghost_profiles(user_id: str, email: str):
+    try:
+        ghost_cvs = await CVRepository.find_all({
+            "candidate_info.email": email,
+            "owner_user_id": {"$ne": user_id}
+        }, limit=None)
+
+        if not ghost_cvs:
+            return
+
+        for cv in ghost_cvs:
+            old_owner_id = cv.get("owner_user_id")
+            cv_id = str(cv["_id"])
+            
+            await CVRepository.update(cv_id, {"owner_user_id": user_id})
+
+            ghost_apps = await ApplicationRepository.find_all({
+                "cv_id": cv_id,
+                "source": ApplicationSource.HR_SOURCED.value
+            }, limit=None)
+
+            for app in ghost_apps:
+                await ApplicationRepository.update(str(app["_id"]), {"applicant_user_id": user_id})
+
+        print(f"[Ghost Merge] Đã hòa mạng {len(ghost_cvs)} CV cho user {email}")
+    except Exception as e:
+        print(f"[Ghost Merge Error] Lỗi khi hòa mạng tài khoản cho {email}: {str(e)}")

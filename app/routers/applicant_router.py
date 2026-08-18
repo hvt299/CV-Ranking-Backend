@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, Form, Response
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from bson import ObjectId
 from datetime import datetime, timezone
 
@@ -223,8 +223,9 @@ async def delete_notification(
         raise HTTPException(status_code=400, detail="ID thông báo không hợp lệ")
 
 class ApplyJobRequest(BaseModel):
-    cv_document_id: str
-    cover_letter: Optional[str] = None
+    cv_document_id: Optional[str] = Field(default=None, description="Để trống nếu muốn dùng CV Mặc định (1-Click Apply)")
+    cover_letter_text: Optional[str] = None
+    cover_letter_url: Optional[str] = None
 
 class SelfScoreRequest(BaseModel):
     cv_document_id: str
@@ -257,9 +258,13 @@ async def upload_cv_to_library(
     file_url = await upload_file_to_cloudinary(content, file.filename)
     compressed_text = compress_cv_data(raw_text, cv_data, cv_data.get("skills", []))
     cv_vector = await get_cv_embeddings(compressed_text)
+
+    existing_cvs = await CVRepository.count_documents({"owner_user_id": current_applicant.id})
+    is_primary = True if existing_cvs == 0 else False
     
     cv_doc = {
         "display_name": display_name,
+        "is_primary": is_primary,
         "filename": file.filename,
         "file_url": file_url,
         "raw_text": raw_text,
@@ -316,9 +321,14 @@ async def apply_to_job(
     if await ApplicationRepository.find_one({"applicant_user_id": current_applicant.id, "job_id": job_id}):
         raise HTTPException(status_code=400, detail="Bạn đã nộp hồ sơ cho vị trí này rồi!")
 
-    cv_doc = await CVRepository.find_one({"_id": ObjectId(payload.cv_document_id), "owner_user_id": current_applicant.id})
-    if not cv_doc:
-        raise HTTPException(status_code=404, detail="Không tìm thấy CV trong thư viện cá nhân")
+    if not payload.cv_document_id:
+        cv_doc = await CVRepository.find_one({"owner_user_id": current_applicant.id, "is_primary": True})
+        if not cv_doc:
+            raise HTTPException(status_code=400, detail="Bạn chưa có CV mặc định. Vui lòng chọn 1 CV cụ thể hoặc tải lên thư viện.")
+    else:
+        cv_doc = await CVRepository.find_one({"_id": ObjectId(payload.cv_document_id), "owner_user_id": current_applicant.id})
+        if not cv_doc:
+            raise HTTPException(status_code=404, detail="Không tìm thấy CV trong thư viện cá nhân.")
 
     cv_data_for_scoring = _prepare_cv_for_scoring(cv_doc, job)
     scoring_result = score_cv(cv_data_for_scoring, job)
@@ -334,6 +344,7 @@ async def apply_to_job(
 
     app_record = {
         "job_id": job_id,
+        "cv_id": str(cv_doc["_id"]),
         "cv_snapshot": cv_snapshot,
         "company_id": job.get("company_id"),
         "applicant_user_id": current_applicant.id,
@@ -341,7 +352,8 @@ async def apply_to_job(
         "status": ApplicationStatus.NEW.value,
         "ai_score": scoring_result,
         "applied_at": datetime.now(timezone.utc),
-        "cover_letter": payload.cover_letter
+        "cover_letter_text": payload.cover_letter_text,
+        "cover_letter_url": payload.cover_letter_url
     }
     app_id = await ApplicationRepository.create(app_record)
 
@@ -389,9 +401,14 @@ async def self_score_cv(
     if not job:
         raise HTTPException(status_code=404, detail="Không tìm thấy vị trí tuyển dụng hoặc đã đóng")
         
-    cv_doc = await CVRepository.find_one({"_id": ObjectId(payload.cv_document_id), "owner_user_id": current_applicant.id})
-    if not cv_doc:
-        raise HTTPException(status_code=404, detail="Không tìm thấy CV trong thư viện cá nhân")
+    if not payload.cv_document_id:
+        cv_doc = await CVRepository.find_one({"owner_user_id": current_applicant.id, "is_primary": True})
+        if not cv_doc:
+            raise HTTPException(status_code=400, detail="Bạn chưa có CV mặc định. Vui lòng chọn 1 CV cụ thể hoặc tải lên thư viện.")
+    else:
+        cv_doc = await CVRepository.find_one({"_id": ObjectId(payload.cv_document_id), "owner_user_id": current_applicant.id})
+        if not cv_doc:
+            raise HTTPException(status_code=404, detail="Không tìm thấy CV trong thư viện cá nhân.")
 
     cv_data_for_scoring = _prepare_cv_for_scoring(cv_doc, job)
     scoring_result = score_cv(cv_data_for_scoring, job)

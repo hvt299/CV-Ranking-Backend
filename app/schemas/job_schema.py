@@ -73,7 +73,7 @@ class JobCreateEnterprise(BaseModel):
     title: str = Field(..., example="Senior Frontend Developer")
     company_id: str
     is_hot: bool = Field(default=False)
-    industry: Optional[str] = None
+    industry: str = Field(default="other", description="Mã ngành cụ thể của Job này (VD: 'it'). Nếu FE không gửi, backend sẽ tự gán Primary Industry của Company.")
     
     job_level: JobLevel = Field(default=JobLevel.MIDDLE)
     employment_type: EmploymentType = Field(default=EmploymentType.FULL_TIME)

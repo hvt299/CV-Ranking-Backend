@@ -35,9 +35,10 @@ class AIScore(BaseModel):
 
 class ApplicationCreate(BaseModel):
     job_id: str
-    cv_document_id: str = Field(
+    cv_id: str = Field(
         ...,
-        description="ID của CVDocument trong Library được chọn để nộp")
+        description="ID của CV gốc trong Document Center (CVRepository)"
+    )
     applicant_user_id: Optional[str] = Field(
         default=None,
         description="None nếu HR chủ động sourcing, có giá trị nếu ứng viên tự nộp"
@@ -47,9 +48,13 @@ class ApplicationCreate(BaseModel):
         ...,
         description="ID của công ty quản lý job và application này"
     )
-    cover_letter: Optional[str] = Field(
+    cover_letter_text: Optional[str] = Field(
         default=None,
-        description="Thư giới thiệu của ứng viên gửi kèm khi nộp"
+        description="Nội dung thư giới thiệu (nhập tay)"
+    )
+    cover_letter_url: Optional[str] = Field(
+        default=None,
+        description="Link file đính kèm thư giới thiệu (PDF/DOCX)"
     )
 
 class InterviewSchedule(BaseModel):

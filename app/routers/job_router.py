@@ -69,6 +69,10 @@ async def create_job(job: JobCreateEnterprise, current_user: CurrentUser = Depen
             detail="Công ty của bạn chưa được xác thực (KYC). Vui lòng chờ Admin duyệt để có thể đăng chiến dịch tuyển dụng."
         )
 
+    if not job_dict.get("industry") or job_dict["industry"] == "other":
+        company_industries = company.get("industries", ["other"])
+        job_dict["industry"] = company_industries[0] if company_industries else "other"
+
     compressed_jd = compress_jd_data(job_dict)
     jd_vector = await get_embedding(compressed_jd)
     
@@ -161,6 +165,14 @@ async def update_job(
     
     if current_user.role != UserRole.ADMIN:
         update_data.pop("is_hot", None)
+
+    if not update_data.get("industry") or update_data["industry"] == "other":
+        target_company_id = update_data.get("company_id") or existing_job.get("company_id")
+        if target_company_id:
+            company_data = await CompanyRepository.get_by_id(target_company_id)
+            if company_data:
+                company_industries = company_data.get("industries", ["other"])
+                update_data["industry"] = company_industries[0] if company_industries else "other"
 
     compressed_jd = compress_jd_data(update_data)
     

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Body, Request, Response, BackgroundTasks
 from bson import ObjectId
 from datetime import datetime, timezone
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.database.config import Collections
 from app.schemas.application_schema import ApplicationUpdate
@@ -13,9 +13,11 @@ from app.repositories.application_repository import ApplicationRepository
 from app.repositories.cv_repository import CVRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.user_interactions_repository import TalentPoolRepository
+from app.repositories.applicant_profile_repository import ApplicantProfileRepository
 
 from app.services.ai_scoring_service import AIScoringService
 from app.services.audit_service import log_action
+from app.services.vector_engine import compress_jd_data, get_embedding
 from app.core.security import require_hr, require_hr_or_admin, get_scope_filter, CurrentUser
 from app.middleware.rate_limit import limiter
 from app.middleware.subscription import verify_cv_quota
@@ -33,6 +35,17 @@ class MapCVRequest(BaseModel):
 class MapBatchCVRequest(BaseModel):
     cv_ids: list[str]
     job_id: str
+
+class DiscoveryRequest(BaseModel):
+    title: str = Field(..., description="Vị trí cần tìm (VD: Senior Backend Dev)")
+    industry: str = Field(default="it")
+    required_skills: list[dict] = Field(..., description="Danh sách kỹ năng cần thiết")
+    min_yoe: float = Field(default=0.0)
+    salary: dict = Field(default={}, description="Ví dụ: {'max_salary': 25000000}")
+    location: dict = Field(default={}, description="Ví dụ: {'province_id': '01'}")
+    work_mode: str = Field(default="Office")
+    employment_type: str = Field(default="Full-time")
+    description: str = Field(..., description="Mô tả công việc (Dùng để so khớp ngữ nghĩa Vector)")
 
 def get_notification_content(status: str, job_title: str):
     status_map = {
@@ -552,3 +565,74 @@ async def get_bookmarked_candidates(current_user: CurrentUser = Depends(require_
         r["id"] = str(r["_id"])
         del r["_id"]
     return records
+
+@router.post("/talent-pool/discover", dependencies=[Depends(require_hr)])
+@limiter.limit("20/day")
+async def discover_talents(
+    request: Request,
+    response: Response,
+    payload: DiscoveryRequest,
+    current_user: CurrentUser = Depends(require_hr) 
+):
+    job_data = payload.model_dump()
+    
+    compressed_jd = compress_jd_data(job_data)
+    jd_vector = await get_embedding(compressed_jd)
+    
+    jd_search_text = f"{payload.title} {payload.description}".lower()
+    
+    job_data.update({
+        "jd_search_text": jd_search_text,
+        "jd_vector_ref": jd_vector
+    })
+
+    candidates = await ApplicantProfileRepository.find_candidates_for_job(job_data, limit=50)
+    
+    if not candidates:
+        return {"status": "success", "message": "Không có ứng viên nào phù hợp với mức lương/địa điểm này.", "leaderboard": []}
+
+    leaderboard = []
+    
+    for candidate in candidates:
+        cv_data_raw = candidate.get("cv_data")
+        if not cv_data_raw:
+            continue
+            
+        cv_id = str(cv_data_raw.get("_id"))
+            
+        cv_record_for_scoring = {
+            "raw_text": cv_data_raw.get("raw_text", ""),
+            "cv_vector_ref": cv_data_raw.get("cv_vector_ref", []),
+            "candidate_info": cv_data_raw.get("candidate_info", {}),
+            "extracted_skills": cv_data_raw.get("extracted_skills", []),
+        }
+        
+        scoring_result, _ = AIScoringService.prepare_and_score_cv(
+            cv_record=cv_record_for_scoring, 
+            jd_data=job_data, 
+            jd_search_text=jd_search_text
+        )
+        
+        if scoring_result.get("total_score", 0) >= 50:
+            candidate_info = cv_data_raw.get("candidate_info", {})
+            
+            leaderboard.append({
+                "applicant_user_id": str(candidate["user_id"]),
+                "cv_document_id": cv_id,
+                "headline": candidate.get("headline", "Ứng viên Tiềm năng"),
+                "expected_salary": f"{candidate.get('expected_salary_min')} - {candidate.get('expected_salary_max')}",
+                "total_score": scoring_result.get("total_score"),
+                "match_tier": scoring_result.get("match_tier"),
+                "badges": scoring_result.get("badges", []),
+                "skills_score": scoring_result.get("score_breakdown", {}).get("skills_score"),
+                "matched_skills": scoring_result.get("matched_skills", [])
+            })
+
+    leaderboard.sort(key=lambda x: x["total_score"], reverse=True)
+
+    return {
+        "status": "success", 
+        "total_scanned": len(candidates),
+        "total_matched": len(leaderboard),
+        "leaderboard": leaderboard
+    }
