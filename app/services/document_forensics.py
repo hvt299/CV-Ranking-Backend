@@ -48,16 +48,12 @@ def _looks_like_keyword_stuffing(text: str, industry: str = "all") -> bool:
     if len(words) < 5:
         return False
 
-    # Lấy danh sách key chuẩn từ DB Cache thay vì hardcode
     target_skill_map = INDUSTRY_SKILL_MAP.get(industry, INDUSTRY_SKILL_MAP.get("all", {}))
     
-    # Gom tất cả variants thành 1 set phẳng để tra cứu siêu tốc O(1)
     keywords_to_check = set(variant for variants in target_skill_map.values() for variant in variants)
 
-    # Đếm số lượng từ khóa va chạm
     matched = sum(1 for w in words if w in keywords_to_check)
 
-    # Nếu trên 50% số từ trong cụm (hoặc >= 5 từ) là danh từ kỹ năng -> Nhồi nhét từ khóa
     return matched >= 5 or (len(words) > 0 and matched / len(words) > 0.5)
 
 

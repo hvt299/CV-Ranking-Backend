@@ -253,7 +253,8 @@ async def register_user(request: Request, response: Response, background_tasks: 
     return {"status": "success", "message": "Đăng ký thành công! Vui lòng kiểm tra email để kích hoạt tài khoản."}
 
 @router.get("/verify")
-async def verify_email(token: str, background_tasks: BackgroundTasks):
+@limiter.limit("20/minute")
+async def verify_email(request: Request, token: str, background_tasks: BackgroundTasks):
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
         user_id = payload.get("sub")
@@ -289,7 +290,8 @@ async def login_for_access_token(request: Request, response: Response, user_cred
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.post("/forgot-password")
-async def forgot_password(background_tasks: BackgroundTasks, email: str = Body(..., embed=True)):
+@limiter.limit("5/day")
+async def forgot_password(request: Request, background_tasks: BackgroundTasks, email: str = Body(..., embed=True)):
     user = await UserRepository.get_by_email(email)
 
     msg = "Nếu email tồn tại trên hệ thống, link khôi phục đã được gửi."
@@ -308,7 +310,8 @@ async def forgot_password(background_tasks: BackgroundTasks, email: str = Body(.
     return {"message": msg}
 
 @router.post("/reset-password")
-async def reset_password(payload: ResetPasswordRequest):
+@limiter.limit("5/day")
+async def reset_password(request: Request, payload: ResetPasswordRequest):
     hashed_token = hashlib.sha256(payload.token.encode()).hexdigest()
     
     user = await UserRepository.find_one({"reset_password_token": hashed_token, "reset_password_expires": {"$gt": datetime.now(timezone.utc)}})

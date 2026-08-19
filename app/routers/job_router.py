@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from bson import ObjectId
 
 from app.core.security import CurrentUser, require_hr, require_hr_or_admin, get_scope_filter
-from app.middleware.subscription import verify_job_quota
+from app.middleware.subscription import get_company_plan_features, require_tier
 from app.database.config import Collections
 from app.schemas.job_schema import JobCreateEnterprise, JobResponse
 from app.schemas.common_schema import JobStatus, UserRole, CompanyStatus, AuditAction
@@ -17,6 +17,8 @@ from app.services.nlp_engine import score_cv
 from app.services.vector_engine import compress_jd_data, get_embedding, get_top_contributing_sentences
 from app.services.audit_service import log_action
 from app.services.analytics_service import AnalyticsService
+from app.middleware.rate_limit import limiter
+from fastapi import Request
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["Job Management & Ranking"])
 
@@ -56,11 +58,29 @@ async def rescore_all_applications_for_job(job_id: str, jd_data: dict):
     print(f"Background Task Hoàn tất: Đã chấm lại {len(applications)} CV cho Job {job_id}")
 
 @router.post("/")
-async def create_job(job: JobCreateEnterprise, current_user: CurrentUser = Depends(verify_job_quota)):
+async def create_job(job: JobCreateEnterprise, current_user: CurrentUser = Depends(require_hr)):
+    features = await get_company_plan_features(current_user.company_id)
+    max_active = features.get("max_active_jobs", 3)
+    
+    active_jobs = await JobRepository.count_documents({
+        "company_id": current_user.company_id, 
+        "status": JobStatus.OPEN.value
+    })
+    
+    if active_jobs >= max_active:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Công ty đã đạt giới hạn mở tối đa {max_active} chiến dịch cùng lúc. Vui lòng nâng cấp gói cước."
+        )
+    
     job_dict = job.model_dump()
 
     if current_user.role != UserRole.ADMIN:
         job_dict["company_id"] = current_user.company_id
+
+        features = await get_company_plan_features(current_user.company_id)
+        if not features.get("can_set_hot_job", False):
+            job_dict.pop("is_hot", None)
 
     company = await CompanyRepository.get_by_id(job_dict["company_id"])
     if not company or company.get("status") != CompanyStatus.VERIFIED.value:
@@ -141,14 +161,22 @@ async def get_job_detail(job_id: str, scope_filter: dict = Depends(get_scope_fil
     return job
 
 @router.put("/{job_id}")
+@limiter.limit("20/day")
 async def update_job(
+    request: Request,
     job_id: str,
     background_tasks: BackgroundTasks,
     job_update: JobCreateEnterprise = Body(...),
     current_user: CurrentUser = Depends(require_hr),
     scope_filter: dict = Depends(get_scope_filter)
 ):
+    update_data = job_update.model_dump()
+    
     if current_user.role != UserRole.ADMIN:
+        features = await get_company_plan_features(current_user.company_id)
+        if not features.get("can_set_hot_job", False):
+            update_data.pop("is_hot", None)
+
         company = await CompanyRepository.get_by_id(current_user.company_id)
         if not company or company.get("status") != CompanyStatus.VERIFIED.value:
             raise HTTPException(
@@ -270,7 +298,7 @@ async def get_job_ranking(job_id: str, scope_filter: dict = Depends(get_scope_fi
         "leaderboard": leaderboard
     }
 
-@router.get("/dashboard/metrics", dependencies=[Depends(require_hr)])
+@router.get("/dashboard/metrics", dependencies=[Depends(require_tier("can_export_analytics"))])
 async def get_dashboard_metrics(
     scope: str = Query("company", description="Góc nhìn: 'company' (Owner) hoặc 'me' (Member)"),
     current_user: CurrentUser = Depends(require_hr)

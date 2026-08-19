@@ -26,6 +26,8 @@ class Collections:
     ADMINISTRATIVE_UNITS = "administrative_units"
     REFRESH_TOKENS = "refresh_tokens"
     SUBSCRIPTION_PLANS = "subscription_plans"
+    PROMOTIONS = "promotions"
+    QUOTA_TRANSACTIONS = "quota_transactions"
     APPLICANT_PROFILES = "applicant_profiles"
     COMPANY_REVIEWS = "company_reviews"
     SAVED_JOBS = "saved_jobs"

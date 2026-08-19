@@ -64,6 +64,9 @@ class AuditAction(str, Enum):
     USER_ANONYMIZED = "user_anonymized"
     PASSWORD_RESET = "password_reset"
     LOGIN_FAILED = "login_failed"
+    PLAN_CREATED = "plan_created"
+    PLAN_UPDATED = "plan_updated"
+    PLAN_STATUS_TOGGLED = "plan_status_toggled"
 
 class SubscriptionTier(str, Enum):
     FREE = "free"
@@ -107,3 +110,23 @@ class NotificationActionType(str, Enum):
     INTERVIEW_SCHEDULED = "interview_scheduled"
     APPLICATION_UPDATED = "application_updated"
     GENERAL_ALERT = "general_alert"
+
+class CurrencyEnum(str, Enum):
+    VND = "VND"
+    USD = "USD"
+
+class DiscountType(str, Enum):
+    PERCENTAGE = "percentage"
+    FIXED_AMOUNT = "fixed_amount"
+
+class QuotaActionType(str, Enum):
+    AI_INTERVIEW_GEN = "AI_INTERVIEW_GEN"
+    REVERSE_MATCHING = "REVERSE_MATCHING"
+    HR_PARSE_CV = "HR_PARSE_CV"
+    HR_MAP_CV_AI_SCORE = "HR_MAP_CV_AI_SCORE"
+    HR_MAP_BATCH_CV_AI_SCORE = "HR_MAP_BATCH_CV_AI_SCORE"
+    EXPIRED_CREDIT_RECOVERY = "EXPIRED_CREDIT_RECOVERY"
+    APPLICANT_SELF_SCORE = "APPLICANT_SELF_SCORE"
+    UPGRADE_FREE = "UPGRADE_FREE"
+    UPGRADE_PRO = "UPGRADE_PRO"
+    UPGRADE_ENTERPRISE = "UPGRADE_ENTERPRISE"

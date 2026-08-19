@@ -65,6 +65,11 @@ class CompanyResponse(CompanyCreate):
     id: str
     status: CompanyStatus
     
+    current_plan_id: Optional[str] = None
+    current_period_start: Optional[datetime] = None
+    current_period_end: Optional[datetime] = None
+    credits_remaining: int = Field(default=0)
+    
     kyc_submitted_at: Optional[datetime] = None
     kyc_approved_at: Optional[datetime] = None
     verified_at: Optional[datetime] = None

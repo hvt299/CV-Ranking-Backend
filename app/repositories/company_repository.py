@@ -45,3 +45,15 @@ class CompanyRepository(BaseRepository):
                 await db[Collections.APPLICATIONS].update_many(app_query, {"$set": {"deleted_at": now}})
                 
         return deleted_count
+
+    @classmethod
+    async def deduct_ai_credits(cls, company_id: str, cost: int) -> bool:
+        db = get_db()
+        from bson import ObjectId
+        
+        result = await db[cls.collection_name].update_one(
+            {"_id": ObjectId(company_id), "credits_remaining": {"$gte": cost}},
+            {"$inc": {"credits_remaining": -cost}}
+        )
+        
+        return result.modified_count > 0

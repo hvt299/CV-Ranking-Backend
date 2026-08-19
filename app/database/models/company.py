@@ -24,7 +24,8 @@ class CompanyDB(CompanyCreate):
     review_count: int = Field(default=0)
     
     current_plan_id: Optional[str] = Field(default=None, description="ID tham chiếu tới collection subscription_plans")
-    subscription_expires_at: Optional[datetime] = None
+    current_period_start: Optional[datetime] = None
+    current_period_end: Optional[datetime] = None
     credits_remaining: int = Field(default=0, description="Trừ lùi mỗi lần dùng AI")
 
     created_at: datetime = Field(default_factory=utc_now)

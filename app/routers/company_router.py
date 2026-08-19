@@ -14,8 +14,11 @@ from app.services.analytics_service import AnalyticsService
 from app.repositories.user_repository import UserRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.department_repository import DepartmentRepository
+from app.repositories.administrative_unit_repository import AdministrativeUnitRepository
 import re
-from app.database.config import get_db, Collections
+from app.middleware.subscription import require_tier
+from app.middleware.rate_limit import limiter
+from fastapi import Request
 from pydantic import ValidationError
 from bson import ObjectId
 
@@ -25,13 +28,11 @@ async def parse_address_heuristic(raw_address: str) -> dict:
     if not raw_address:
         return None
         
-    db = get_db()
-    
     address_clean = re.sub(r'[,.\-]', ' ', raw_address.lower())
     address_clean = re.sub(r'\s+', ' ', address_clean)
     address_clean = f" {address_clean} "
     
-    provinces = await db[Collections.ADMINISTRATIVE_UNITS].find({"level": "province"}).to_list(100)
+    provinces = await AdministrativeUnitRepository.find_many({"level": "province"}, limit=100)
     provinces.sort(key=lambda x: len(x['name']), reverse=True)
     
     matched_province = None
@@ -46,11 +47,11 @@ async def parse_address_heuristic(raw_address: str) -> dict:
 
     prov_code = matched_province["code"]
     
-    new_wards = await db[Collections.ADMINISTRATIVE_UNITS].find({
+    new_wards = await AdministrativeUnitRepository.find_many({
         "parent_code": prov_code, 
         "level": "ward", 
         "version": "new"
-    }).to_list(1000)
+    }, limit=1000)
     
     if new_wards:
         new_wards.sort(key=lambda x: len(x['name']), reverse=True)
@@ -69,11 +70,11 @@ async def parse_address_heuristic(raw_address: str) -> dict:
                     "street_address": raw_address
                 }
 
-    old_districts = await db[Collections.ADMINISTRATIVE_UNITS].find({
+    old_districts = await AdministrativeUnitRepository.find_many({
         "parent_code": prov_code,
         "level": "district",
         "version": "old"
-    }).to_list(100)
+    }, limit=100)
     old_districts.sort(key=lambda x: len(x['name']), reverse=True)
     
     matched_district = None
@@ -85,11 +86,11 @@ async def parse_address_heuristic(raw_address: str) -> dict:
             
     matched_ward = None
     if matched_district:
-        old_wards = await db[Collections.ADMINISTRATIVE_UNITS].find({
+        old_wards = await AdministrativeUnitRepository.find_many({
             "parent_code": matched_district["code"],
             "level": "ward",
             "version": "old"
-        }).to_list(1000)
+        }, limit=1000)
         old_wards.sort(key=lambda x: len(x['name']), reverse=True)
         for w in old_wards:
             clean_w_name = re.sub(r'^(phường|xã|thị trấn)\s+', '', w['name'], flags=re.IGNORECASE).strip().lower()
@@ -123,7 +124,8 @@ async def parse_address_heuristic(raw_address: str) -> dict:
     }
 
 @router.get("/lookup-tax/{tax_code}")
-async def lookup_tax_code(tax_code: str):
+@limiter.limit("10/minute")
+async def lookup_tax_code(request: Request, tax_code: str):
     url = f"https://api.vietqr.io/v2/business/{tax_code}"
     
     try:
@@ -216,7 +218,9 @@ async def update_company_settings(
     }
 
 @router.post("/invite", dependencies=[Depends(require_hr)])
+@limiter.limit("20/day")
 async def invite_hr_member(
+    request: Request,
     background_tasks: BackgroundTasks,
     payload: InviteMemberPayload = Body(...), 
     current_user: CurrentUser = Depends(require_hr)
@@ -265,7 +269,7 @@ async def invite_hr_member(
     
     return {"status": "success", "message": f"Đã gửi thư mời thành công đến {safe_email}"}
 
-@router.get("/{company_id}/analytics", dependencies=[Depends(require_hr)])
+@router.get("/{company_id}/analytics", dependencies=[Depends(require_tier("can_export_analytics"))])
 async def get_company_analytics(company_id: str, current_user: CurrentUser = Depends(require_hr)):
     if current_user.role != UserRole.HR_OWNER.value or current_user.company_id != company_id:
         raise HTTPException(

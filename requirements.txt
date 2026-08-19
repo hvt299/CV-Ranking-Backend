@@ -27,6 +27,10 @@ python-docx
 pdfplumber
 numpy==1.26.4
 
+# --- Data Processing & Web Parsing ---
+pandas
+beautifulsoup4
+
 # --- Rate Limiting & Caching ---
 slowapi
 hiredis

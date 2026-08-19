@@ -8,10 +8,12 @@ import math
 from app.core.security import CurrentUser, require_admin
 from app.schemas.common_schema import UserRole, CompanyStatus, AuditAction, NotificationType, NotificationActorType, NotificationActionType, NotificationReadStatus
 from app.schemas.company_schema import CompanyVerifyAction
+from app.schemas.subscription_plan_schema import SubscriptionPlanCreate, SubscriptionPlanUpdate
 from app.repositories.user_repository import UserRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.notification_repository import NotificationRepository
+from app.repositories.subscription_plan_repository import SubscriptionPlanRepository
 from app.services.analytics_service import AnalyticsService
 from app.services.audit_service import log_action
 
@@ -29,6 +31,9 @@ class UpdateRoleRequest(BaseModel):
 
 class UpdateUserStatusRequest(BaseModel):
     is_active: bool = Field(..., description="Trạng thái khóa/mở khóa tài khoản")
+
+class TogglePlanStatusRequest(BaseModel):
+    is_active: bool = Field(..., description="Trạng thái Ẩn/Hiện gói cước")
 
 @router.post("/bootstrap")
 async def bootstrap_admin(payload: BootstrapRequest):
@@ -279,3 +284,93 @@ async def get_admin_dashboard():
 async def get_admin_analytics():
     data = await AnalyticsService.get_admin_system_analytics()
     return {"status": "success", "data": data}
+
+@router.post("/subscriptions/plans", dependencies=[Depends(require_admin)])
+async def create_subscription_plan(
+    payload: SubscriptionPlanCreate, 
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    existing_plan = await SubscriptionPlanRepository.find_one({"plan_code": payload.plan_code})
+    if existing_plan:
+        raise HTTPException(status_code=400, detail=f"Mã định danh gói cước '{payload.plan_code}' đã tồn tại. Vui lòng chọn mã khác.")
+        
+    record = payload.model_dump()
+    record["created_at"] = datetime.now(timezone.utc)
+    record["updated_at"] = datetime.now(timezone.utc)
+    
+    _id = await SubscriptionPlanRepository.create(record)
+    
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.PLAN_CREATED,
+        target_type="subscription_plan",
+        target_id=str(_id),
+        note=f"Admin tạo gói cước mới: {payload.name}"
+    )
+    
+    return {"status": "success", "message": "Tạo gói cước thành công", "id": str(_id)}
+
+@router.patch("/subscriptions/plans/{plan_id}", dependencies=[Depends(require_admin)])
+async def update_subscription_plan(
+    plan_id: str, 
+    payload: SubscriptionPlanUpdate, 
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    plan = await SubscriptionPlanRepository.get_by_id(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Không tìm thấy gói cước")
+        
+    update_data = payload.model_dump(exclude_unset=True)
+    if not update_data:
+        return {"status": "success", "message": "Không có dữ liệu mới để cập nhật"}
+        
+    update_data["updated_at"] = datetime.now(timezone.utc)
+    await SubscriptionPlanRepository.update(plan_id, update_data)
+    
+    before_state = {k: v for k, v in plan.items() if k != "_id"}
+    after_state = {**before_state, **update_data}
+    
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.PLAN_UPDATED,
+        target_type="subscription_plan",
+        target_id=plan_id,
+        note=f"Admin cập nhật thông tin gói cước",
+        before_state=before_state,
+        after_state=after_state
+    )
+    
+    return {"status": "success", "message": "Cập nhật gói cước thành công"}
+
+@router.patch("/subscriptions/plans/{plan_id}/status", dependencies=[Depends(require_admin)])
+async def toggle_subscription_plan_status(
+    plan_id: str, 
+    payload: TogglePlanStatusRequest, 
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    plan = await SubscriptionPlanRepository.get_by_id(plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Không tìm thấy gói cước")
+        
+    before_status = plan.get("is_active", True)
+    if before_status == payload.is_active:
+        return {"status": "success", "message": "Trạng thái không thay đổi"}
+        
+    await SubscriptionPlanRepository.update(plan_id, {"is_active": payload.is_active, "updated_at": datetime.now(timezone.utc)})
+    
+    action_msg = "Mở bán (Hiện)" if payload.is_active else "Ngừng bán (Ẩn)"
+    
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.PLAN_STATUS_TOGGLED,
+        target_type="subscription_plan",
+        target_id=plan_id,
+        note=f"Admin {action_msg} gói cước",
+        before_state={"is_active": before_status},
+        after_state={"is_active": payload.is_active}
+    )
+    
+    return {"status": "success", "message": f"Đã {action_msg} gói cước thành công"}

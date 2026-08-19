@@ -15,9 +15,6 @@ client = None
 if GEMINI_API_KEY:
     client = genai.Client(api_key=GEMINI_API_KEY)
 
-# ==========================================
-# 1. ĐỊNH NGHĨA JSON SCHEMA (STRUCTURED OUTPUT)
-# ==========================================
 class CVMetricsSchema(BaseModel):
     candidate_name: Optional[str] = Field(None, description="Họ và tên đầy đủ của ứng viên. Trả về null nếu không rõ.")
     current_job_title: Optional[str] = Field(None, description="Chức danh/vị trí công việc gần đây nhất hoặc hiện tại.")
@@ -33,9 +30,6 @@ class InterviewQuestionSchema(BaseModel):
     reason: str = Field(description="Lý do hỏi câu này, chỉ ra lỗ hổng cụ thể")
     suggested_answer: str = Field(description="Gợi ý đánh giá câu trả lời (Dấu hiệu đỗ/trượt)")
 
-# ==========================================
-# 2. HÀM TRÍCH XUẤT CV (KÈM FALLBACK)
-# ==========================================
 async def extract_cv_metrics_with_llm(raw_text: str) -> dict:
     fallback_data = {
         "candidate_name": None,
@@ -99,9 +93,6 @@ async def extract_cv_metrics_with_llm(raw_text: str) -> dict:
         logger.error(f"Lỗi parse JSON từ LLM: {parse_error}")
         return fallback_data
 
-# ==========================================
-# 3. HÀM SINH CÂU HỎI PHỎNG VẤN
-# ==========================================
 async def generate_interview_questions(cv_text: str, jd_text: str) -> list:
     if not client:
         return []

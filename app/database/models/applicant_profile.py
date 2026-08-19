@@ -29,6 +29,11 @@ class ApplicantProfileDB(BaseModel):
     external_cv_links: List[dict] = Field(default_factory=list)
     is_searchable: bool = Field(default=True)
     
+    current_plan_id: Optional[str] = Field(default=None, description="ID tham chiếu tới collection subscription_plans")
+    current_period_start: Optional[datetime] = None
+    current_period_end: Optional[datetime] = None
+    credits_remaining: int = Field(default=0, description="Trừ lùi mỗi lần dùng AI")
+    
     hr_view_count: int = Field(default=0, description="Số lượt HR bấm vào xem profile chi tiết")
     search_appearance_count: int = Field(default=0, description="Số lượt xuất hiện trên trang kết quả tìm kiếm của HR")
     

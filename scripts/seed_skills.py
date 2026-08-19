@@ -11,7 +11,6 @@ async def seed_skills():
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     SKILLS_FOLDER = os.path.join(BASE_DIR, "data", "skills")
     
-    # Dùng trực tiếp SkillRepository.delete_many thông qua BaseRepository
     await SkillRepository.delete_many({})
     
     inserted_count = 0
@@ -24,7 +23,7 @@ async def seed_skills():
             
             with open(os.path.join(industry_path, filename), encoding="utf-8") as f:
                 reader = csv.reader(f)
-                next(reader, None) # Bỏ qua header
+                next(reader, None)
                 
                 for row in reader:
                     if len(row) < 3: continue
@@ -33,7 +32,6 @@ async def seed_skills():
                     canonical_name = row[2].strip()
                     aliases = [v.strip().lower() for v in row[3:] if v.strip()]
                     
-                    # Gọi thẳng ClassMethod .create()
                     await SkillRepository.create({
                         "industry": industry,
                         "category": category,

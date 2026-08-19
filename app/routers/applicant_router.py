@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from app.core.security import get_current_user, CurrentUser
 from app.database.config import Collections
+from app.repositories.applicant_profile_repository import ApplicantProfileRepository
 from app.schemas.common_schema import UserRole, JobStatus, ApplicationStatus, ApplicationSource, NotificationReadStatus, NotificationType, NotificationActorType, NotificationActionType
 from app.schemas.user_interaction_schema import SavedCompanyCreate, MatchingPreferencesCreate, MatchingPreferencesUpdate
 from app.repositories.job_repository import JobRepository
@@ -14,7 +15,10 @@ from app.repositories.cv_repository import CVRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.user_interactions_repository import SavedCompanyRepository, MatchingPreferencesRepository
 from app.repositories.company_repository import CompanyRepository
+from app.repositories.subscription_plan_repository import SubscriptionPlanRepository
+from app.repositories.audit_repository import AuditRepository
 
+from app.services.audit_service import log_action
 from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
 from app.services.vector_engine import compress_cv_data, get_cv_embeddings, get_top_contributing_sentences
 from app.services.document_forensics import detect_hidden_text
@@ -231,6 +235,18 @@ class SelfScoreRequest(BaseModel):
     cv_document_id: str
     job_id: str
 
+async def get_applicant_plan_features(user_id: str) -> dict:
+    profile = await ApplicantProfileRepository.get_by_user_id(user_id)
+    if not profile:
+        return {"max_cv_uploads": 3, "max_job_applies_per_day": 10, "max_self_scores_per_day": 3}
+    
+    plan_id = profile.get("current_plan_id")
+    if not plan_id:
+        return {"max_cv_uploads": 3, "max_job_applies_per_day": 10, "max_self_scores_per_day": 3}
+        
+    plan = await SubscriptionPlanRepository.get_by_id(plan_id)
+    return plan.get("features", {}) if plan else {"max_cv_uploads": 3, "max_job_applies_per_day": 10, "max_self_scores_per_day": 3}
+
 @router.post("/library/upload")
 @limiter.limit("20/day")
 async def upload_cv_to_library(
@@ -240,6 +256,16 @@ async def upload_cv_to_library(
     display_name: str = Form("CV Của Tôi"),
     current_applicant: CurrentUser = Depends(require_applicant)
 ):
+    features = await get_applicant_plan_features(current_applicant.id)
+    max_uploads = features.get("max_cv_uploads", 3)
+    
+    current_cv_count = await CVRepository.count_documents({"owner_user_id": current_applicant.id})
+    if current_cv_count >= max_uploads:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Thư viện của bạn đã đạt giới hạn {max_uploads} CV. Vui lòng xóa bớt hoặc nâng cấp gói cước."
+        )
+    
     content = await file.read()
     
     if len(content) > MAX_FILE_SIZE:
@@ -301,6 +327,22 @@ async def apply_to_job(
     payload: ApplyJobRequest,
     current_applicant: CurrentUser = Depends(require_applicant)
 ):
+    features = await get_applicant_plan_features(current_applicant.id)
+    max_applies = features.get("max_job_applies_per_day", 10)
+
+    now = datetime.now(timezone.utc)
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    apps_today = await ApplicationRepository.count_documents({
+        "applicant_user_id": current_applicant.id,
+        "applied_at": {"$gte": start_of_day}
+    })
+    if apps_today >= max_applies:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Bạn đã đạt giới hạn ứng tuyển {max_applies} công việc/ngày. Vui lòng quay lại vào ngày mai."
+        )
+    
     job = await JobRepository.find_one({"_id": ObjectId(job_id), "status": JobStatus.OPEN.value})
     if not job:
         raise HTTPException(status_code=404, detail="Không tìm thấy vị trí tuyển dụng hoặc đã đóng")
@@ -397,6 +439,24 @@ async def self_score_cv(
     payload: SelfScoreRequest,
     current_applicant: CurrentUser = Depends(require_applicant)
 ):    
+    features = await get_applicant_plan_features(current_applicant.id)
+    max_scores = features.get("max_self_scores_per_day", 3)
+    
+    now = datetime.now(timezone.utc)
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    scores_today = await AuditRepository.count_documents({
+        "actor_id": current_applicant.id,
+        "action": "APPLICANT_SELF_SCORE",
+        "created_at": {"$gte": start_of_day}
+    })
+    
+    if scores_today >= max_scores:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Bạn đã đạt giới hạn {max_scores} lần chấm điểm thử AI trong ngày. Vui lòng quay lại vào ngày mai hoặc nâng cấp gói cước."
+        )
+
     job = await JobRepository.find_one({"_id": ObjectId(payload.job_id), "status": JobStatus.OPEN.value})
     if not job:
         raise HTTPException(status_code=404, detail="Không tìm thấy vị trí tuyển dụng hoặc đã đóng")
@@ -412,6 +472,15 @@ async def self_score_cv(
 
     cv_data_for_scoring = _prepare_cv_for_scoring(cv_doc, job)
     scoring_result = score_cv(cv_data_for_scoring, job)
+
+    await log_action(
+        actor_id=current_applicant.id,
+        actor_role=current_applicant.role,
+        action="APPLICANT_SELF_SCORE",
+        target_type="job",
+        target_id=payload.job_id,
+        note="Ứng viên dùng tính năng chấm điểm AI thử"
+    )
 
     return {
         "status": "success", 
