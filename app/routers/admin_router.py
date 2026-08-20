@@ -14,8 +14,11 @@ from app.repositories.company_repository import CompanyRepository
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.subscription_plan_repository import SubscriptionPlanRepository
+from app.repositories.system_settings_repository import SystemSettingsRepository
 from app.services.analytics_service import AnalyticsService
 from app.services.audit_service import log_action
+from app.services.nlp_engine import refresh_system_settings
+from app.database.config import db_instance
 
 from pydantic import BaseModel, Field, EmailStr
 
@@ -374,3 +377,53 @@ async def toggle_subscription_plan_status(
     )
     
     return {"status": "success", "message": f"Đã {action_msg} gói cước thành công"}
+
+# =====================================================================
+# CẤU HÌNH ĐỘNG HỆ THỐNG (SYSTEM SETTINGS)
+# =====================================================================
+
+class SystemSettingsUpdate(BaseModel):
+    industry_weights: Optional[dict] = None
+    action_costs: Optional[dict] = None
+
+@router.get("/system/settings", dependencies=[Depends(require_admin)])
+async def get_system_settings():
+    doc = await SystemSettingsRepository.find_one({"setting_type": "global_config"})
+    if doc:
+        doc["id"] = str(doc["_id"])
+        del doc["_id"]
+        return {"status": "success", "data": doc}
+    return {"status": "success", "data": {}}
+
+@router.put("/system/settings", dependencies=[Depends(require_admin)])
+async def update_system_settings(
+    payload: SystemSettingsUpdate,
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    update_data = payload.model_dump(exclude_unset=True)
+    if not update_data:
+        return {"status": "success", "message": "Không có dữ liệu cập nhật"}
+        
+    await SystemSettingsRepository.update_custom(
+        {"setting_type": "global_config"},
+        {"$set": update_data},
+        upsert=True
+    )
+    
+    # Invalidation Cache (Xóa Cache cũ)
+    if db_instance.redis:
+        await db_instance.redis.delete("system_settings")
+        
+    # Ép server hiện tại tải lại Memory từ DB ngay lập tức
+    await refresh_system_settings()
+    
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.SYSTEM_SETTINGS_UPDATED,
+        target_type="system_settings",
+        target_id="global_config",
+        note="Admin cập nhật cấu hình động (Trọng số / Giá Credit)"
+    )
+    
+    return {"status": "success", "message": "Cập nhật cấu hình hệ thống thành công. Cache đã được làm mới."}

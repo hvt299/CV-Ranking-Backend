@@ -72,13 +72,23 @@ def require_tier(feature_key: str):
     return dependency
 
 
-def require_credits(cost: int, action_type: str):
+def require_credits(action_type: str):
     async def dependency(current_user: CurrentUser = Depends(require_hr)):
-        success = await CompanyRepository.deduct_ai_credits(current_user.company_id, cost)
+        from app.services.nlp_engine import GLOBAL_SYSTEM_SETTINGS
+        
+        # Bắt buộc đọc từ DB/Memory
+        actual_cost = GLOBAL_SYSTEM_SETTINGS.get("action_costs", {}).get(action_type)
+        if actual_cost is None:
+            raise HTTPException(
+                status_code=503, 
+                detail=f"Hệ thống đang thiếu cấu hình bảng giá cho '{action_type}'. Chưa thể thực hiện lúc này."
+            )
+
+        success = await CompanyRepository.deduct_ai_credits(current_user.company_id, actual_cost)
         if not success:
             raise HTTPException(
                 status_code=402, 
-                detail=f"Tài khoản không đủ Credit AI (cần {cost} credits). Vui lòng nạp thêm."
+                detail=f"Tài khoản không đủ Credit AI (cần {actual_cost} credits cho {action_type}). Vui lòng nạp thêm."
             )
             
         company = await CompanyRepository.get_by_id(current_user.company_id)
@@ -86,7 +96,7 @@ def require_credits(cost: int, action_type: str):
             "company_id": current_user.company_id,
             "user_id": current_user.id,
             "action_type": action_type,
-            "credit_cost": cost,
+            "credit_cost": actual_cost,
             "balance_after": company.get("credits_remaining", 0),
             "created_at": datetime.now(timezone.utc)
         })

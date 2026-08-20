@@ -66,7 +66,7 @@ async def upload_cv_to_pool(
     request: Request,
     response: Response,
     file: UploadFile = File(..., description="File CV định dạng PDF hoặc DOCX"),
-    current_user: CurrentUser = Depends(require_credits(cost=1, action_type="HR_PARSE_CV"))
+    current_user: CurrentUser = Depends(require_credits(action_type="HR_PARSE_CV"))
 ):
     content = await file.read()
     
@@ -132,7 +132,7 @@ async def map_cv_to_job(
     payload: MapCVRequest,
     current_user: CurrentUser = Depends(require_hr),
     scope_filter: dict = Depends(get_scope_filter),
-    _ = Depends(require_credits(cost=1, action_type="HR_MAP_CV_AI_SCORE"))
+    _ = Depends(require_credits(action_type="HR_MAP_CV_AI_SCORE"))
 ):
     job_id = payload.job_id
     
@@ -211,10 +211,17 @@ async def map_multiple_cvs_to_job(
     if not cv_ids:
          raise HTTPException(status_code=400, detail="Danh sách CV không được để trống")
          
+    from app.services.nlp_engine import GLOBAL_SYSTEM_SETTINGS
+
     if len(cv_ids) > 50:
          raise HTTPException(status_code=400, detail="Chỉ được phép xử lý tối đa 50 CV trong một lần để đảm bảo hiệu suất.")
          
-    cost = len(cv_ids) * 1
+    # Đọc giá động từ cấu hình
+    unit_cost = GLOBAL_SYSTEM_SETTINGS.get("action_costs", {}).get("HR_MAP_BATCH_CV_AI_SCORE")
+    if unit_cost is None:
+        raise HTTPException(status_code=503, detail="Hệ thống chưa cấu hình giá cho tính năng chấm điểm hàng loạt.")
+        
+    cost = len(cv_ids) * unit_cost
     success = await CompanyRepository.deduct_ai_credits(current_user.company_id, cost)
     if not success:
         raise HTTPException(
@@ -530,7 +537,7 @@ async def toggle_application_viewed(
 async def get_ai_interview_questions(
     app_id: str, 
     scope_filter: dict = Depends(get_scope_filter),
-    _ = Depends(require_credits(cost=2, action_type="AI_INTERVIEW_GEN"))
+    _ = Depends(require_credits(action_type="AI_INTERVIEW_GEN"))
 ):
     filter_query = {"_id": ObjectId(app_id), **scope_filter}
     app_record = await ApplicationRepository.find_one(filter_query)
@@ -600,7 +607,7 @@ async def discover_talents(
     response: Response,
     payload: DiscoveryRequest,
     current_user: CurrentUser = Depends(require_tier("can_use_reverse_matching")),
-    _ = Depends(require_credits(cost=10, action_type="REVERSE_MATCHING"))
+    _ = Depends(require_credits(action_type="REVERSE_MATCHING"))
 ):
     job_data = payload.model_dump()
     

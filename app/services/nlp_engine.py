@@ -15,43 +15,85 @@ from app.services.vector_engine import calculate_dense_score, calculate_sparse_s
 from app.services.llm_service import extract_cv_metrics_with_llm
 
 from app.repositories.skill_repository import SkillRepository
+from app.database.config import get_db, db_instance, Collections
+import json
 
 # ==========================================================
-# BỘ TỪ ĐIỂN TRỌNG SỐ THEO NGÀNH NGHỀ (INDUSTRY_WEIGHT_MATRICES)
-# ==========================================================
-# Cấu trúc: "Mã ngành": (skills_weight, nlp_weight, experience_weight, education_weight, alpha_hybrid)
-# alpha: Hệ số lai ghép (BM25 vs BGE-M3). IT cần keyword -> alpha thấp (0.4). Sale cần văn phong -> alpha cao (0.7).
-INDUSTRY_WEIGHT_MATRICES = {
-    # 1. Khối Kỹ thuật & Công nghệ (Ưu tiên tuyệt đối Skills & Exp, Edu thấp, Alpha thiên về BM25)
-    "it": (0.50, 0.20, 0.25, 0.05, 0.35),
-    "electronics_telecom": (0.45, 0.20, 0.20, 0.15, 0.40),
-    "manufacturing": (0.40, 0.20, 0.30, 0.10, 0.45),
-    "construction": (0.40, 0.15, 0.30, 0.15, 0.45),
-    "energy_agriculture": (0.40, 0.15, 0.25, 0.20, 0.50),
-    
-    # 2. Khối Kinh doanh & Vận hành (Ưu tiên NLP (giao tiếp) & Exp, Alpha thiên về BGE-M3 Semantic)
-    "sales": (0.30, 0.35, 0.25, 0.10, 0.75),
-    "marketing": (0.35, 0.35, 0.20, 0.10, 0.70),
-    "customer_service": (0.25, 0.40, 0.25, 0.10, 0.75),
-    "retail_lifestyle": (0.25, 0.30, 0.35, 0.10, 0.65),
-    "logistics": (0.35, 0.20, 0.30, 0.15, 0.60),
-    
-    # 3. Khối Chuyên môn Đặc thù (Cân bằng, Edu quan trọng hơn bình thường)
-    "hr_admin_legal": (0.35, 0.30, 0.20, 0.15, 0.65),
-    "finance": (0.35, 0.20, 0.25, 0.20, 0.45), # Tài chính cần chính xác thuật ngữ (BM25)
-    "accounting": (0.40, 0.15, 0.25, 0.20, 0.40), # Kế toán cũng ưu tiên công cụ (BM25)
-    "healthcare": (0.35, 0.10, 0.25, 0.30, 0.30), # Y tế đòi hỏi thuật ngữ chính xác tuyệt đối (Alpha = 0.3)
-    "education": (0.30, 0.20, 0.20, 0.30, 0.60),
-    "law": (0.30, 0.25, 0.20, 0.25, 0.40),
-    
-    # 4. Nhóm Đặc biệt
-    "labor": (0.30, 0.10, 0.50, 0.10, 0.50), # Lao động phổ thông ưu tiên kinh nghiệm thực tế
-    "driver": (0.40, 0.05, 0.45, 0.10, 0.50),
-    "design": (0.45, 0.25, 0.20, 0.10, 0.60), # Design ưu tiên skill (tools) và NLP (văn hóa)
-    
-    # DEFAULT (Fallback nếu không match)
-    "default": (0.40, 0.30, 0.20, 0.10, 0.50)
+# CẤU HÌNH ĐỘNG HỆ THỐNG (MEMORY CACHE)
+# ==========================================
+GLOBAL_SYSTEM_SETTINGS = {
+    "industry_weights": {},
+    "action_costs": {}
 }
+
+DEFAULT_SYSTEM_SETTINGS = {
+    "industry_weights": {
+        "it": (0.50, 0.20, 0.25, 0.05, 0.35),
+        "electronics_telecom": (0.45, 0.20, 0.20, 0.15, 0.40),
+        "manufacturing": (0.40, 0.20, 0.30, 0.10, 0.45),
+        "construction": (0.40, 0.15, 0.30, 0.15, 0.45),
+        "energy_agriculture": (0.40, 0.15, 0.25, 0.20, 0.50),
+        "sales": (0.30, 0.35, 0.25, 0.10, 0.75),
+        "marketing": (0.35, 0.35, 0.20, 0.10, 0.70),
+        "customer_service": (0.25, 0.40, 0.25, 0.10, 0.75),
+        "retail_lifestyle": (0.25, 0.30, 0.35, 0.10, 0.65),
+        "logistics": (0.35, 0.20, 0.30, 0.15, 0.60),
+        "hr_admin_legal": (0.35, 0.30, 0.20, 0.15, 0.65),
+        "finance": (0.35, 0.20, 0.25, 0.20, 0.45),
+        "accounting": (0.40, 0.15, 0.25, 0.20, 0.40),
+        "healthcare": (0.35, 0.10, 0.25, 0.30, 0.30),
+        "education": (0.30, 0.20, 0.20, 0.30, 0.60),
+        "law": (0.30, 0.25, 0.20, 0.25, 0.40),
+        "labor": (0.30, 0.10, 0.50, 0.10, 0.50),
+        "driver": (0.40, 0.05, 0.45, 0.10, 0.50),
+        "design": (0.45, 0.25, 0.20, 0.10, 0.60),
+        "default": (0.40, 0.30, 0.20, 0.10, 0.50)
+    },
+    "action_costs": {
+        "REVERSE_MATCHING": 10,
+        "AI_INTERVIEW_GEN": 2,
+        "HR_PARSE_CV": 1,
+        "HR_MAP_CV_AI_SCORE": 1,
+        "HR_MAP_BATCH_CV_AI_SCORE": 1,
+        "APPLICANT_SELF_SCORE": 1
+    }
+}
+
+async def refresh_system_settings():
+    db = get_db()
+    redis = db_instance.redis
+    settings = None
+    
+    if redis:
+        try:
+            cached = await redis.get("system_settings")
+            if cached:
+                settings = json.loads(cached)
+        except Exception as e:
+            logging.error(f"Redis Cache Error: {e}")
+    
+    if not settings:
+        doc = await db[Collections.SYSTEM_SETTINGS].find_one({"setting_type": "global_config"})
+        if doc:
+            settings = {
+                "industry_weights": doc.get("industry_weights", {}),
+                "action_costs": doc.get("action_costs", {})
+            }
+        else:
+            logging.warning("WARNING: SYSTEM_SETTINGS trống. Tự động bơm cấu hình mặc định (Auto-Seed)!")
+            settings = DEFAULT_SYSTEM_SETTINGS
+            await db[Collections.SYSTEM_SETTINGS].insert_one({
+                "setting_type": "global_config",
+                "industry_weights": settings["industry_weights"],
+                "action_costs": settings["action_costs"]
+            })
+            
+        if redis:
+            await redis.set("system_settings", json.dumps(settings), ex=3600)
+                
+    GLOBAL_SYSTEM_SETTINGS["industry_weights"] = settings.get("industry_weights", {})
+    GLOBAL_SYSTEM_SETTINGS["action_costs"] = settings.get("action_costs", {})
+    logging.info("Đã đồng bộ SYSTEM_SETTINGS từ Database/Redis vào Memory.")
 
 INDUSTRY_SKILL_MAP = {}
 
@@ -527,10 +569,15 @@ def score_cv(cv_data: dict, jd_data: dict) -> dict:
     education_score = min(100.0, education_score)
 
     # ==========================================
-    # XỬ LÝ TRỌNG SỐ & ALPHA MATRIX
+    # XỬ LÝ TRỌNG SỐ & ALPHA MATRIX (STRICT DYNAMIC SETTINGS)
     # ==========================================
     industry_code = industry.lower()
-    matrix = INDUSTRY_WEIGHT_MATRICES.get(industry_code, INDUSTRY_WEIGHT_MATRICES["default"])
+    industry_weights = GLOBAL_SYSTEM_SETTINGS.get("industry_weights", {})
+    
+    matrix = industry_weights.get(industry_code) or industry_weights.get("default")
+    if not matrix:
+        raise ValueError("Hệ thống chưa được cấu hình trọng số AI (Industry Weights) trong Database. Không thể tính điểm.")
+        
     WEIGHT_SKILL, WEIGHT_NLP, WEIGHT_EXP, WEIGHT_EDU, DEFAULT_ALPHA = matrix
 
     score_weights = jd_data.get("score_weights")

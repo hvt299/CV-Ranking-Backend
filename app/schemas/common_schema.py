@@ -67,6 +67,7 @@ class AuditAction(str, Enum):
     PLAN_CREATED = "plan_created"
     PLAN_UPDATED = "plan_updated"
     PLAN_STATUS_TOGGLED = "plan_status_toggled"
+    SYSTEM_SETTINGS_UPDATED = "system_settings_updated"
 
 class SubscriptionTier(str, Enum):
     FREE = "free"

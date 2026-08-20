@@ -18,7 +18,7 @@ from apscheduler.triggers.cron import CronTrigger
 from app.database.config import connect_to_mongo, close_mongo_connection
 from app.routers import auth_router, cv_router, job_router, admin_router, applicant_router, company_router, system_router, interview_router, subscription_router
 from app.routers.upload_router import router as upload_router
-from app.services.nlp_engine import initialize_skill_map
+from app.services.nlp_engine import initialize_skill_map, refresh_system_settings
 from datetime import timedelta
 from app.repositories.job_repository import JobRepository
 from app.repositories.company_repository import CompanyRepository
@@ -69,6 +69,7 @@ async def cleanup_audit_logs():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_to_mongo()
+    await refresh_system_settings()
     await initialize_skill_map()
     
     scheduler.add_job(auto_expire_jobs, CronTrigger(minute=0)) 
