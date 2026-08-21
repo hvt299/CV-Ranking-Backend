@@ -24,7 +24,8 @@ async def upload_general_file(
         raise HTTPException(status_code=400, detail="Dung lượng file vượt quá giới hạn 5MB")
     
     try:
-        file_url = await upload_file_to_cloudinary(content, file.filename)
+        safe_filename = f"usr_{current_user.id}_{file.filename}"
+        file_url = await upload_file_to_cloudinary(content, safe_filename)
         
         return {"url": file_url, "message": "Tải file lên thành công"}
     except Exception as e:

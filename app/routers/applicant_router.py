@@ -23,7 +23,7 @@ from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
 from app.services.vector_engine import compress_cv_data, get_cv_embeddings, get_top_contributing_sentences
 from app.services.document_forensics import detect_hidden_text
 from app.middleware.rate_limit import limiter
-from app.services.storage_service import upload_file_to_cloudinary, delete_file_from_cloudinary
+from app.services.storage_service import upload_file_to_cloudinary, delete_file_from_cloudinary, is_safe_url
 from typing import Optional
 
 router = APIRouter(prefix="/api/v1/apply", tags=["Applicant"])
@@ -288,6 +288,12 @@ async def upload_cv_to_library(
     existing_cvs = await CVRepository.count_documents({"owner_user_id": current_applicant.id})
     is_primary = True if existing_cvs == 0 else False
     
+    if existing_cvs >= max_uploads:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Thư viện của bạn đã đạt giới hạn {max_uploads} CV. Vui lòng xóa bớt hoặc nâng cấp gói cước."
+        )
+    
     cv_doc = {
         "display_name": display_name,
         "is_primary": is_primary,
@@ -362,6 +368,9 @@ async def apply_to_job(
         
     if await ApplicationRepository.find_one({"applicant_user_id": current_applicant.id, "job_id": job_id}):
         raise HTTPException(status_code=400, detail="Bạn đã nộp hồ sơ cho vị trí này rồi!")
+
+    if payload.cover_letter_url and not is_safe_url(payload.cover_letter_url):
+        raise HTTPException(status_code=400, detail="URL Đính kèm không hợp lệ hoặc chứa mã độc (SSRF Blocked).")
 
     if not payload.cv_document_id:
         cv_doc = await CVRepository.find_one({"owner_user_id": current_applicant.id, "is_primary": True})

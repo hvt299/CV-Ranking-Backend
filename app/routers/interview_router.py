@@ -85,6 +85,10 @@ async def get_interviews_for_application(
     application_id: str,
     current_user: CurrentUser = Depends(require_hr)
 ):
+    application = await ApplicationRepository.get_by_id(application_id)
+    if not application or application.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển hợp lệ")
+
     interviews = await InterviewRepository.get_by_application_id(application_id)
     for i in interviews:
         i["id"] = str(i["_id"])

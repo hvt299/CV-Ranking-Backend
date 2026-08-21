@@ -4,6 +4,10 @@ import cloudinary.uploader
 import logging
 from dotenv import load_dotenv
 
+import socket
+import ipaddress
+from urllib.parse import urlparse
+
 load_dotenv()
 logger = logging.getLogger(__name__)
 
@@ -47,4 +51,24 @@ async def delete_file_from_cloudinary(file_url: str) -> bool:
         return True
     except Exception as e:
         logger.error(f"Lỗi khi xóa file Cloudinary: {e}")
+        return False
+
+def is_safe_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+            
+        if parsed.hostname in ("localhost", "127.0.0.1", "169.254.169.254", "metadata.google.internal"):
+            return False
+            
+        ip = socket.gethostbyname(parsed.hostname)
+        ip_obj = ipaddress.ip_address(ip)
+        
+        if ip_obj.is_loopback or ip_obj.is_private or ip_obj.is_link_local or ip_obj.is_multicast:
+            return False
+            
+        return True
+    except Exception as e:
+        logger.warning(f"SSRF Shield Blocked URL ({url}): {e}")
         return False

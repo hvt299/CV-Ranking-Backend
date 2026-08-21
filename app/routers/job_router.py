@@ -267,8 +267,12 @@ async def get_job_ranking(job_id: str, scope_filter: dict = Depends(get_scope_fi
         except:
             pass
 
+    match_stage = {"job_id": job_id}
+    if scope_filter:
+        match_stage.update(scope_filter)
+
     pipeline = [
-        {"$match": {"job_id": job_id}},
+        {"$match": match_stage},
         {"$sort": {"ai_score.total_score": -1}},
         {"$limit": 200}
     ]

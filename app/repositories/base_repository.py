@@ -7,6 +7,17 @@ class BaseRepository:
     collection_name: str = None
 
     @classmethod
+    def sanitize_payload(cls, payload: dict) -> dict:
+        if not isinstance(payload, dict): 
+            return payload
+        sanitized = {}
+        for k, v in payload.items():
+            if str(k).startswith('$'):
+                continue
+            sanitized[k] = cls.sanitize_payload(v) if isinstance(v, dict) else v
+        return sanitized
+
+    @classmethod
     def _apply_soft_delete(cls, query: dict, include_deleted: bool) -> dict:
         if not include_deleted and "deleted_at" not in query:
             query["deleted_at"] = None

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Body, R
 from bson import ObjectId
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
+from typing import Optional
 
 from app.database.config import Collections
 from app.schemas.application_schema import ApplicationUpdate
@@ -19,6 +20,7 @@ from app.repositories.quota_transaction_repository import QuotaTransactionReposi
 from app.services.ai_scoring_service import AIScoringService
 from app.services.audit_service import log_action
 from app.services.vector_engine import compress_jd_data, get_embedding
+from app.services.nlp_engine import GLOBAL_SYSTEM_SETTINGS
 from app.core.security import require_hr, require_hr_or_admin, get_scope_filter, CurrentUser
 from app.middleware.rate_limit import limiter
 from app.middleware.subscription import require_tier, require_credits
@@ -37,13 +39,21 @@ class MapBatchCVRequest(BaseModel):
     cv_ids: list[str]
     job_id: str
 
+class SalaryFilter(BaseModel):
+    min_salary: Optional[int] = None
+    max_salary: Optional[int] = None
+
+class LocationFilter(BaseModel):
+    province_code: Optional[str] = None
+    district_code: Optional[str] = None
+
 class DiscoveryRequest(BaseModel):
     title: str = Field(..., description="Vị trí cần tìm (VD: Senior Backend Dev)")
     industry: str = Field(default="it")
     required_skills: list[dict] = Field(..., description="Danh sách kỹ năng cần thiết")
     min_yoe: float = Field(default=0.0)
-    salary: dict = Field(default={}, description="Ví dụ: {'max_salary': 25000000}")
-    location: dict = Field(default={}, description="Ví dụ: {'province_id': '01'}")
+    salary: SalaryFilter = Field(default_factory=SalaryFilter, description="Bộ lọc lương an toàn")
+    location: LocationFilter = Field(default_factory=LocationFilter, description="Bộ lọc địa điểm an toàn")
     work_mode: str = Field(default="Office")
     employment_type: str = Field(default="Full-time")
     description: str = Field(..., description="Mô tả công việc (Dùng để so khớp ngữ nghĩa Vector)")
@@ -210,13 +220,10 @@ async def map_multiple_cvs_to_job(
 
     if not cv_ids:
          raise HTTPException(status_code=400, detail="Danh sách CV không được để trống")
-         
-    from app.services.nlp_engine import GLOBAL_SYSTEM_SETTINGS
 
     if len(cv_ids) > 50:
          raise HTTPException(status_code=400, detail="Chỉ được phép xử lý tối đa 50 CV trong một lần để đảm bảo hiệu suất.")
          
-    # Đọc giá động từ cấu hình
     unit_cost = GLOBAL_SYSTEM_SETTINGS.get("action_costs", {}).get("HR_MAP_BATCH_CV_AI_SCORE")
     if unit_cost is None:
         raise HTTPException(status_code=503, detail="Hệ thống chưa cấu hình giá cho tính năng chấm điểm hàng loạt.")
@@ -609,7 +616,7 @@ async def discover_talents(
     current_user: CurrentUser = Depends(require_tier("can_use_reverse_matching")),
     _ = Depends(require_credits(action_type="REVERSE_MATCHING"))
 ):
-    job_data = payload.model_dump()
+    job_data = payload.model_dump(exclude_none=True, exclude_unset=True)
     
     compressed_jd = compress_jd_data(job_data)
     jd_vector = await get_embedding(compressed_jd)
