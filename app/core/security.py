@@ -6,8 +6,9 @@ from typing import Optional, Dict, Any
 import jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
+from qstash import Receiver
 
 from app.schemas.common_schema import UserRole
 from app.repositories.user_repository import UserRepository
@@ -139,3 +140,32 @@ async def get_scope_filter(current_user: CurrentUser = Depends(get_current_user)
     return {"_id": None}
 
 get_current_user_with_role = get_current_user
+
+QSTASH_CURRENT_SIGNING_KEY = os.getenv("QSTASH_CURRENT_SIGNING_KEY", "")
+QSTASH_NEXT_SIGNING_KEY = os.getenv("QSTASH_NEXT_SIGNING_KEY", "")
+
+receiver = None
+if QSTASH_CURRENT_SIGNING_KEY:
+    receiver = Receiver(
+        current_signing_key=QSTASH_CURRENT_SIGNING_KEY,
+        next_signing_key=QSTASH_NEXT_SIGNING_KEY
+    )
+
+async def require_qstash_signature(request: Request):
+    if not QSTASH_CURRENT_SIGNING_KEY or not receiver:
+        return True
+        
+    signature = request.headers.get("Upstash-Signature")
+    if not signature:
+        raise HTTPException(status_code=401, detail="Missing Upstash-Signature header")
+
+    body = await request.body()
+    try:
+        receiver.verify(
+            body=body.decode("utf-8"),
+            signature=signature,
+            url=str(request.url)
+        )
+        return True
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid Webhook Signature: {e}")

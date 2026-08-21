@@ -5,14 +5,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-rate_limit_url = os.getenv("RATE_LIMIT_URL", "memory://")
+redis_url = os.getenv("REDIS_URL", "")
+rate_limit_url = redis_url if redis_url.startswith(("redis://", "rediss://", "unix://")) else "memory://"
 
 limiter = Limiter(
     key_func=get_remote_address,
     storage_uri=rate_limit_url,
     default_limits=["300/minute"],
     headers_enabled=True,
-    # Với rediss:// (TLS), một số version limits/redis-py cần khai báo rõ
-    # ssl_cert_reqs để tránh lỗi "CERTIFICATE_VERIFY_FAILED" tuỳ CA bundle của server.
     storage_options={"ssl_cert_reqs": None} if rate_limit_url.startswith("rediss://") else {},
 )

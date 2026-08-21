@@ -19,8 +19,16 @@ from app.services.audit_service import log_action
 from app.services.analytics_service import AnalyticsService
 from app.middleware.rate_limit import limiter
 from fastapi import Request
+import os
+import httpx
+from app.core.security import require_qstash_signature
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["Job Management & Ranking"])
+
+QSTASH_TOKEN = os.getenv("QSTASH_TOKEN", "")
+QSTASH_URL = os.getenv("QSTASH_URL", "https://qstash-eu-central-1.upstash.io")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 async def rescore_all_applications_for_job(job_id: str, jd_data: dict):
     applications = await ApplicationRepository.find_all({"job_id": job_id}, limit=None)
@@ -230,11 +238,26 @@ async def update_job(
         after_state=after_state
     )
 
-    background_tasks.add_task(rescore_all_applications_for_job, job_id, update_data)
+    if QSTASH_TOKEN:
+        try:
+            target_webhook_url = f"{BACKEND_URL}/api/v1/jobs/internal/webhook/rescore"
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{QSTASH_URL}{target_webhook_url}",
+                    headers={
+                        "Authorization": f"Bearer {QSTASH_TOKEN}",
+                        "Content-Type": "application/json"
+                    },
+                    json={"job_id": job_id}
+                )
+        except Exception as e:
+            print(f"[QStash Error] Không thể gửi lệnh rescore cho job {job_id}: {e}")
+    else:
+        background_tasks.add_task(rescore_all_applications_for_job, job_id, update_data)
 
     return {
         "status": "success", 
-        "message": "Cập nhật JD thành công. Hệ thống đang tự động chấm lại điểm ứng viên ở chế độ chạy ngầm."
+        "message": "Cập nhật JD thành công. Hệ thống đã đưa tác vụ chấm lại CV vào hàng đợi Serverless."
     }
 
 @router.delete("/{job_id}", dependencies=[Depends(require_hr)])
@@ -387,3 +410,18 @@ async def get_public_job_detail(job_id: str):
     job.pop("company_info", None)
     
     return job
+
+class RescoreWebhookPayload(BaseModel):
+    job_id: str
+
+@router.post("/internal/webhook/rescore", dependencies=[Depends(require_qstash_signature)], include_in_schema=False)
+async def webhook_rescore_job(payload: RescoreWebhookPayload):
+    job_id = payload.job_id
+    
+    jd_data = await JobRepository.get_by_id(job_id)
+    if not jd_data:
+        return {"status": "ignored", "message": "Job không còn tồn tại"}
+        
+    await rescore_all_applications_for_job(job_id, jd_data)
+    
+    return {"status": "success", "message": f"Đã chấm lại toàn bộ CV cho Job {job_id}"}
