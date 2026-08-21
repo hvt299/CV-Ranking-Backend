@@ -9,15 +9,23 @@ from app.core.security import CurrentUser, require_admin
 from app.schemas.common_schema import UserRole, CompanyStatus, AuditAction, NotificationType, NotificationActorType, NotificationActionType, NotificationReadStatus
 from app.schemas.company_schema import CompanyVerifyAction
 from app.schemas.subscription_plan_schema import SubscriptionPlanCreate, SubscriptionPlanUpdate
+from app.schemas.skill_schema import SkillCreate, SkillUpdate
+from app.schemas.administrative_unit_schema import AdministrativeUnitCreate
+from app.schemas.common_schema import ReportStatus, JobStatus
+from app.schemas.report_schema import ReportResolve
 from app.repositories.user_repository import UserRepository
+from app.repositories.job_repository import JobRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.audit_repository import AuditRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.subscription_plan_repository import SubscriptionPlanRepository
 from app.repositories.system_settings_repository import SystemSettingsRepository
+from app.repositories.skill_repository import SkillRepository
+from app.repositories.administrative_unit_repository import AdministrativeUnitRepository
+from app.repositories.report_repository import ReportRepository
 from app.services.analytics_service import AnalyticsService
 from app.services.audit_service import log_action
-from app.services.nlp_engine import refresh_system_settings
+from app.services.nlp_engine import refresh_system_settings, initialize_skill_map
 from app.database.config import db_instance
 
 from pydantic import BaseModel, Field, EmailStr
@@ -40,20 +48,10 @@ class TogglePlanStatusRequest(BaseModel):
 
 @router.post("/bootstrap")
 async def bootstrap_admin(payload: BootstrapRequest):
-    if not BOOTSTRAP_SECRET:
-        raise HTTPException(status_code=403, detail="Bootstrap đã bị tắt")
-        
-    if payload.secret != BOOTSTRAP_SECRET:
-        raise HTTPException(status_code=403, detail="Secret không đúng")
-        
-    modified_count = await UserRepository.update_custom(
-        {"email": payload.email}, 
-        {"$set": {"role": UserRole.ADMIN.value}}
+    raise HTTPException(
+        status_code=410, 
+        detail="API Bootstrap đã bị vô hiệu hóa vĩnh viễn trên môi trường Production để đảm bảo an toàn hệ thống."
     )
-    if modified_count == 0:
-        raise HTTPException(status_code=404, detail="Không tìm thấy tài khoản")
-        
-    return {"status": "success", "message": f"{payload.email} đã được set làm Admin"}
 
 @router.get("/users", dependencies=[Depends(require_admin)])
 async def list_users():
@@ -410,11 +408,9 @@ async def update_system_settings(
         upsert=True
     )
     
-    # Invalidation Cache (Xóa Cache cũ)
     if db_instance.redis:
         await db_instance.redis.delete("system_settings")
         
-    # Ép server hiện tại tải lại Memory từ DB ngay lập tức
     await refresh_system_settings()
     
     await log_action(
@@ -427,3 +423,221 @@ async def update_system_settings(
     )
     
     return {"status": "success", "message": "Cập nhật cấu hình hệ thống thành công. Cache đã được làm mới."}
+
+# =====================================================================
+# MASTER DATA MANAGEMENT (QUẢN TRỊ DANH MỤC LÕI)
+# =====================================================================
+
+@router.post("/system/skills", dependencies=[Depends(require_admin)])
+async def create_skill(
+    payload: SkillCreate,
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    record = payload.model_dump()
+    _id = await SkillRepository.create(record)
+    
+    await initialize_skill_map() 
+    
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.SKILL_CREATED,
+        target_type="skill",
+        target_id=str(_id),
+        note=f"Admin thêm Kỹ năng mới: {payload.canonical_name}"
+    )
+    return {"status": "success", "message": "Tạo kỹ năng thành công", "id": str(_id)}
+
+@router.patch("/system/skills/{skill_id}", dependencies=[Depends(require_admin)])
+async def update_skill(
+    skill_id: str,
+    payload: SkillUpdate,
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    existing = await SkillRepository.get_by_id(skill_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Không tìm thấy kỹ năng")
+        
+    update_data = payload.model_dump(exclude_unset=True)
+    if not update_data:
+        return {"status": "success", "message": "Không có dữ liệu cập nhật"}
+        
+    await SkillRepository.update(skill_id, update_data)
+    
+    await initialize_skill_map() 
+    
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.SKILL_UPDATED,
+        target_type="skill",
+        target_id=skill_id,
+        note=f"Admin cập nhật Kỹ năng"
+    )
+    return {"status": "success", "message": "Cập nhật kỹ năng thành công"}
+
+@router.delete("/system/skills/{skill_id}", dependencies=[Depends(require_admin)])
+async def delete_skill(
+    skill_id: str,
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    deleted = await SkillRepository.delete(skill_id, hard_delete=True)
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="Không tìm thấy kỹ năng")
+        
+    await initialize_skill_map() 
+    
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.SKILL_DELETED,
+        target_type="skill",
+        target_id=skill_id,
+        note=f"Admin xóa cứng Kỹ năng"
+    )
+    return {"status": "success", "message": "Đã xóa kỹ năng"}
+
+class AdministrativeUnitUpdate(BaseModel):
+    name: Optional[str] = None
+    parent_code: Optional[str] = None
+    version: Optional[str] = None
+
+@router.post("/system/locations", dependencies=[Depends(require_admin)])
+async def create_location(
+    payload: AdministrativeUnitCreate,
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    record = payload.model_dump()
+    _id = await AdministrativeUnitRepository.create(record)
+    
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.LOCATION_CREATED,
+        target_type="administrative_unit",
+        target_id=str(_id),
+        note=f"Admin thêm Địa điểm mới: {payload.name}"
+    )
+    return {"status": "success", "message": "Thêm địa điểm thành công", "id": str(_id)}
+
+@router.patch("/system/locations/{location_id}", dependencies=[Depends(require_admin)])
+async def update_location(
+    location_id: str,
+    payload: AdministrativeUnitUpdate,
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    existing = await AdministrativeUnitRepository.get_by_id(location_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Không tìm thấy địa điểm")
+        
+    update_data = payload.model_dump(exclude_unset=True)
+    if not update_data:
+        return {"status": "success", "message": "Không có dữ liệu cập nhật"}
+        
+    await AdministrativeUnitRepository.update(location_id, update_data)
+    
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.LOCATION_UPDATED,
+        target_type="administrative_unit",
+        target_id=location_id,
+        note=f"Admin cập nhật Địa điểm"
+    )
+    return {"status": "success", "message": "Cập nhật địa điểm thành công"}
+
+@router.delete("/system/locations/{location_id}", dependencies=[Depends(require_admin)])
+async def delete_location(
+    location_id: str,
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    deleted = await AdministrativeUnitRepository.delete(location_id, hard_delete=True)
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="Không tìm thấy địa điểm")
+        
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.LOCATION_DELETED,
+        target_type="administrative_unit",
+        target_id=location_id,
+        note=f"Admin xóa cứng Địa điểm"
+    )
+    return {"status": "success", "message": "Đã xóa địa điểm"}
+
+# =====================================================================
+# MODERATION & REPORTS (QUẢN TRỊ VI PHẠM)
+# =====================================================================
+
+@router.get("/reports", dependencies=[Depends(require_admin)])
+async def get_reports(
+    status: Optional[ReportStatus] = None,
+    target_type: Optional[str] = None
+):
+    query = {}
+    if status:
+        query["status"] = status.value
+    if target_type:
+        query["target_type"] = target_type
+        
+    reports = await ReportRepository.find_many(query, sort=[("created_at", -1)], limit=200)
+    for r in reports:
+        r["id"] = str(r["_id"])
+        del r["_id"]
+    return {"status": "success", "data": reports}
+
+@router.patch("/reports/{report_id}/resolve", dependencies=[Depends(require_admin)])
+async def resolve_report(
+    report_id: str,
+    payload: ReportResolve,
+    action: str = Query(..., description="Duyệt (resolve) hoặc Từ chối (reject)"),
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    report = await ReportRepository.get_by_id(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Không tìm thấy báo cáo")
+        
+    new_status = ReportStatus.RESOLVED.value if action == "resolve" else ReportStatus.REJECTED.value
+    audit_action = AuditAction.REPORT_RESOLVED if action == "resolve" else AuditAction.REPORT_REJECTED
+    
+    update_data = {
+        "status": new_status,
+        "admin_notes": payload.admin_notes,
+        "action_taken": payload.action_taken,
+        "resolved_by_admin_id": current_admin.id,
+        "resolved_at": datetime.now(timezone.utc)
+    }
+    
+    await ReportRepository.update(report_id, update_data)
+    
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=audit_action,
+        target_type="report",
+        target_id=report_id,
+        note=f"Admin xử lý báo cáo: {payload.action_taken}"
+    )
+    return {"status": "success", "message": f"Đã xử lý báo cáo thành {new_status}"}
+
+@router.patch("/moderation/jobs/{job_id}/suspend", dependencies=[Depends(require_admin)])
+async def suspend_job(
+    job_id: str,
+    reason: str = Body(..., embed=True),
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    job = await JobRepository.get_by_id(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Không tìm thấy việc làm")
+        
+    await JobRepository.update(job_id, {"status": JobStatus.CLOSED.value, "is_suspended": True})
+    
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.JOB_SUSPENDED,
+        target_type="job",
+        target_id=job_id,
+        note=f"Admin KHÓA việc làm vi phạm. Lý do: {reason}"
+    )
+    return {"status": "success", "message": "Đã khóa chiến dịch tuyển dụng vi phạm"}

@@ -68,6 +68,27 @@ class AuditAction(str, Enum):
     PLAN_UPDATED = "plan_updated"
     PLAN_STATUS_TOGGLED = "plan_status_toggled"
     SYSTEM_SETTINGS_UPDATED = "system_settings_updated"
+    SKILL_CREATED = "skill_created"
+    SKILL_UPDATED = "skill_updated"
+    SKILL_DELETED = "skill_deleted"
+    LOCATION_CREATED = "location_created"
+    LOCATION_UPDATED = "location_updated"
+    LOCATION_DELETED = "location_deleted"
+    JOB_SUSPENDED = "job_suspended"
+    USER_SUSPENDED = "user_suspended"
+    REPORT_RESOLVED = "report_resolved"
+    REPORT_REJECTED = "report_rejected"
+
+class ReportStatus(str, Enum):
+    PENDING = "pending"
+    RESOLVED = "resolved"
+    REJECTED = "rejected"
+
+class ReportTargetType(str, Enum):
+    JOB = "job"
+    COMPANY = "company"
+    USER = "user"
+    SYSTEM = "system"
 
 class SubscriptionTier(str, Enum):
     FREE = "free"

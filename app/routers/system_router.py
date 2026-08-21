@@ -10,8 +10,20 @@ from app.repositories.user_repository import UserRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.job_repository import JobRepository
 from app.repositories.application_repository import ApplicationRepository
+from app.repositories.report_repository import ReportRepository
+from app.schemas.report_schema import ReportCreate
+from datetime import datetime, timezone
 
 router = APIRouter(prefix="/api/v1/system", tags=["System & Master Data"])
+
+@router.post("/reports")
+async def submit_report(payload: ReportCreate):
+    record = payload.model_dump()
+    record["created_at"] = datetime.now(timezone.utc)
+    record["updated_at"] = datetime.now(timezone.utc)
+    
+    _id = await ReportRepository.create(record)
+    return {"status": "success", "message": "Cảm ơn bạn đã báo cáo. Chúng tôi sẽ xem xét và xử lý sớm nhất có thể."}
 
 @router.get("/locations")
 async def get_locations():
