@@ -78,6 +78,10 @@ class AuditAction(str, Enum):
     USER_SUSPENDED = "user_suspended"
     REPORT_RESOLVED = "report_resolved"
     REPORT_REJECTED = "report_rejected"
+    TICKET_STATUS_UPDATED = "ticket_status_updated"
+    BLOG_CREATED = "blog_created"
+    BLOG_UPDATED = "blog_updated"
+    BLOG_DELETED = "blog_deleted"
 
 class ReportStatus(str, Enum):
     PENDING = "pending"
@@ -89,6 +93,18 @@ class ReportTargetType(str, Enum):
     COMPANY = "company"
     USER = "user"
     SYSTEM = "system"
+
+class TicketStatus(str, Enum):
+    OPEN = "open"
+    IN_PROGRESS = "in_progress"
+    RESOLVED = "resolved"
+    CLOSED = "closed"
+
+class TicketCategory(str, Enum):
+    TECH_BUG = "tech_bug"
+    BILLING = "billing"
+    KYC = "kyc"
+    OTHER = "other"
 
 class SubscriptionTier(str, Enum):
     FREE = "free"

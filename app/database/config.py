@@ -41,6 +41,8 @@ class Collections:
     INTERVIEWS = "interviews"
     INTERVIEW_FEEDBACKS = "interview_feedbacks"
     REPORTS = "reports"
+    SUPPORT_TICKETS = "support_tickets"
+    BLOG_POSTS = "blog_posts"
 
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "cv-ranking")
 

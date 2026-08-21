@@ -1,9 +1,12 @@
 from datetime import datetime, timezone
+import re
 
+from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from typing import Optional
 import os
 import math
+import unidecode
 
 from app.core.security import CurrentUser, require_admin
 from app.schemas.common_schema import UserRole, CompanyStatus, AuditAction, NotificationType, NotificationActorType, NotificationActionType, NotificationReadStatus
@@ -13,6 +16,9 @@ from app.schemas.skill_schema import SkillCreate, SkillUpdate
 from app.schemas.administrative_unit_schema import AdministrativeUnitCreate
 from app.schemas.common_schema import ReportStatus, JobStatus
 from app.schemas.report_schema import ReportResolve
+from app.schemas.support_ticket_schema import SupportTicketResolve
+from app.schemas.common_schema import TicketStatus
+from app.repositories.support_ticket_repository import SupportTicketRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.job_repository import JobRepository
 from app.repositories.company_repository import CompanyRepository
@@ -23,9 +29,13 @@ from app.repositories.system_settings_repository import SystemSettingsRepository
 from app.repositories.skill_repository import SkillRepository
 from app.repositories.administrative_unit_repository import AdministrativeUnitRepository
 from app.repositories.report_repository import ReportRepository
+from app.repositories.blog_repository import BlogRepository
+from app.schemas.blog_schema import BlogCreate, BlogUpdate
+from fastapi import BackgroundTasks
 from app.services.analytics_service import AnalyticsService
 from app.services.audit_service import log_action
 from app.services.nlp_engine import refresh_system_settings, initialize_skill_map
+from app.services.email_service import send_ticket_reply_email
 from app.database.config import db_instance
 
 from pydantic import BaseModel, Field, EmailStr
@@ -376,10 +386,6 @@ async def toggle_subscription_plan_status(
     
     return {"status": "success", "message": f"Đã {action_msg} gói cước thành công"}
 
-# =====================================================================
-# CẤU HÌNH ĐỘNG HỆ THỐNG (SYSTEM SETTINGS)
-# =====================================================================
-
 class SystemSettingsUpdate(BaseModel):
     industry_weights: Optional[dict] = None
     action_costs: Optional[dict] = None
@@ -423,10 +429,6 @@ async def update_system_settings(
     )
     
     return {"status": "success", "message": "Cập nhật cấu hình hệ thống thành công. Cache đã được làm mới."}
-
-# =====================================================================
-# MASTER DATA MANAGEMENT (QUẢN TRỊ DANH MỤC LÕI)
-# =====================================================================
 
 @router.post("/system/skills", dependencies=[Depends(require_admin)])
 async def create_skill(
@@ -565,10 +567,6 @@ async def delete_location(
     )
     return {"status": "success", "message": "Đã xóa địa điểm"}
 
-# =====================================================================
-# MODERATION & REPORTS (QUẢN TRỊ VI PHẠM)
-# =====================================================================
-
 @router.get("/reports", dependencies=[Depends(require_admin)])
 async def get_reports(
     status: Optional[ReportStatus] = None,
@@ -641,3 +639,171 @@ async def suspend_job(
         note=f"Admin KHÓA việc làm vi phạm. Lý do: {reason}"
     )
     return {"status": "success", "message": "Đã khóa chiến dịch tuyển dụng vi phạm"}
+
+@router.get("/support-tickets", dependencies=[Depends(require_admin)])
+async def get_support_tickets(
+    status: Optional[TicketStatus] = None,
+    category: Optional[str] = None
+):
+    query = {}
+    if status:
+        query["status"] = status.value
+    if category:
+        query["category"] = category
+        
+    tickets = await SupportTicketRepository.find_many(query, sort=[("created_at", -1)], limit=200)
+    for t in tickets:
+        t["id"] = str(t["_id"])
+        del t["_id"]
+    return {"status": "success", "data": tickets}
+
+@router.patch("/support-tickets/{ticket_id}/resolve", dependencies=[Depends(require_admin)])
+async def resolve_support_ticket(
+    ticket_id: str,
+    payload: SupportTicketResolve,
+    background_tasks: BackgroundTasks,
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    ticket = await SupportTicketRepository.get_by_id(ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Không tìm thấy Ticket")
+        
+    update_data = {
+        "status": payload.status.value,
+        "admin_notes": payload.admin_notes,
+        "updated_at": datetime.now(timezone.utc)
+    }
+    
+    if payload.status in [TicketStatus.RESOLVED, TicketStatus.CLOSED]:
+        update_data["resolved_by_admin_id"] = current_admin.id
+        update_data["resolved_at"] = datetime.now(timezone.utc)
+        
+    await SupportTicketRepository.update(ticket_id, update_data)
+    
+    if payload.reply_message and ticket.get("email"):
+        update_data["reply_message"] = payload.reply_message
+        send_ticket_reply_email(
+            background_tasks=background_tasks,
+            to=ticket.get("email"),
+            name=ticket.get("full_name", "Khách hàng"),
+            ticket_subject=ticket.get("subject", "Không có tiêu đề"),
+            ticket_id=ticket_id,
+            reply_message=payload.reply_message
+        )
+    
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.TICKET_STATUS_UPDATED,
+        target_type="support_ticket",
+        target_id=ticket_id,
+        note=f"Admin cập nhật trạng thái Ticket thành {payload.status.value}"
+    )
+    return {"status": "success", "message": f"Đã cập nhật Ticket thành {payload.status.value}"}
+
+def generate_slug(text: str) -> str:
+    unaccented = unidecode.unidecode(text).lower()
+    slug = re.sub(r'[^a-z0-9\s-]', '', unaccented)
+    slug = re.sub(r'[\s-]+', '-', slug).strip('-')
+    return slug
+
+def calculate_reading_time(html_content: str) -> int:
+    clean_text = re.sub(r'<[^>]+>', ' ', html_content)
+    words = len(clean_text.split())
+    minutes = math.ceil(words / 200)
+    return max(1, minutes)
+
+@router.post("/blogs", dependencies=[Depends(require_admin)])
+async def create_blog_post(
+    payload: BlogCreate,
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    base_slug = generate_slug(payload.title)
+    slug = base_slug
+    counter = 1
+    
+    while await BlogRepository.find_one({"slug": slug}):
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+        
+    reading_time = calculate_reading_time(payload.content_html)
+    
+    record = payload.model_dump()
+    record.update({
+        "slug": slug,
+        "reading_time_minutes": reading_time,
+        "view_count": 0,
+        "created_by_admin_id": current_admin.id,
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc)
+    })
+    
+    _id = await BlogRepository.create(record)
+    
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.BLOG_CREATED,
+        target_type="blog_post",
+        target_id=str(_id),
+        note=f"Admin đăng bài viết: {payload.title}"
+    )
+    return {"status": "success", "message": "Đăng bài viết thành công", "id": str(_id)}
+
+@router.patch("/blogs/{blog_id}", dependencies=[Depends(require_admin)])
+async def update_blog_post(
+    blog_id: str,
+    payload: BlogUpdate,
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    existing = await BlogRepository.get_by_id(blog_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bài viết")
+        
+    update_data = payload.model_dump(exclude_unset=True)
+    if not update_data:
+        return {"status": "success", "message": "Không có dữ liệu cập nhật"}
+        
+    if "title" in update_data and update_data["title"] != existing.get("title"):
+        base_slug = generate_slug(update_data["title"])
+        slug = base_slug
+        counter = 1
+        while await BlogRepository.find_one({"slug": slug, "_id": {"$ne": ObjectId(blog_id)}}):
+            slug = f"{base_slug}-{counter}"
+            counter += 1
+        update_data["slug"] = slug
+        
+    if "content_html" in update_data:
+        update_data["reading_time_minutes"] = calculate_reading_time(update_data["content_html"])
+        
+    update_data["updated_at"] = datetime.now(timezone.utc)
+    await BlogRepository.update(blog_id, update_data)
+    
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.BLOG_UPDATED,
+        target_type="blog_post",
+        target_id=blog_id,
+        note="Admin cập nhật bài viết"
+    )
+    return {"status": "success", "message": "Cập nhật bài viết thành công"}
+
+@router.delete("/blogs/{blog_id}", dependencies=[Depends(require_admin)])
+async def delete_blog_post(
+    blog_id: str,
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    deleted = await BlogRepository.delete(blog_id, hard_delete=True)
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bài viết")
+        
+    await log_action(
+        actor_id=current_admin.id,
+        actor_role=current_admin.role,
+        action=AuditAction.BLOG_DELETED,
+        target_type="blog_post",
+        target_id=blog_id,
+        note="Admin xóa bài viết"
+    )
+    return {"status": "success", "message": "Đã xóa bài viết"}

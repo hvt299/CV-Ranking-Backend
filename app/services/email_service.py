@@ -198,6 +198,18 @@ I18N_MESSAGES = {
                 <p style="margin: 0 0 16px; color: {COLOR_TEXT_MUTED};">Vui lòng phản hồi lại email này để xác nhận khả năng tham dự của bạn.</p>
                 <p style="margin: 0;">Trân trọng,<br/><strong>Bộ phận Tuyển dụng - {{company_name}}</strong></p>
             """
+        },
+        "ticket_reply": {
+            "subject": "Phản hồi yêu cầu hỗ trợ: {subject}",
+            "content": f"""
+                <p style="font-size: 16px; margin: 0 0 16px;">Xin chào <strong>{{name}}</strong>,</p>
+                <p style="margin: 0 0 16px; color: {COLOR_TEXT_MUTED};">Cảm ơn bạn đã liên hệ với bộ phận hỗ trợ của ATS. Chúng tôi đã xem xét yêu cầu của bạn (Mã: <strong>#{str("{{ticket_id}}")[:8]}</strong>) và xin phản hồi như sau:</p>
+                <div style="background-color: {COLOR_BACKGROUND}; border-left: 4px solid {COLOR_PRIMARY_600}; border-radius: 8px; padding: 16px 18px; margin: 20px 0; color: {COLOR_TEXT}; white-space: pre-wrap;">
+                    {{reply_message}}
+                </div>
+                <p style="margin: 0 0 16px; color: {COLOR_TEXT_MUTED};">Nếu bạn có bất kỳ thắc mắc nào khác, vui lòng phản hồi lại email này.</p>
+                <p style="margin: 0;">Trân trọng,<br/><strong>Đội ngũ Hỗ trợ ATS</strong></p>
+            """
         }
     },
     "en": {
@@ -249,13 +261,22 @@ I18N_MESSAGES = {
                 </div>
                 <p style="font-size: 13px; color: {COLOR_TEXT_SUBTLE}; margin: 0;"><em>*Note: This link expires in 7 days. Do not share this link with others.</em></p>
             """
+        },
+        "ticket_reply": {
+            "subject": "Support Ticket Reply: {subject}",
+            "content": f"""
+                <p style="font-size: 16px; margin: 0 0 16px;">Hello <strong>{{name}}</strong>,</p>
+                <p style="margin: 0 0 16px; color: {COLOR_TEXT_MUTED};">Thank you for contacting ATS Support. We have reviewed your request (Ticket ID: <strong>#{str("{{ticket_id}}")[:8]}</strong>) and here is our response:</p>
+                <div style="background-color: {COLOR_BACKGROUND}; border-left: 4px solid {COLOR_PRIMARY_600}; border-radius: 8px; padding: 16px 18px; margin: 20px 0; color: {COLOR_TEXT}; white-space: pre-wrap;">
+                    {{reply_message}}
+                </div>
+                <p style="margin: 0 0 16px; color: {COLOR_TEXT_MUTED};">If you have any further questions, please feel free to reply directly to this email.</p>
+                <p style="margin: 0;">Best regards,<br/><strong>ATS Support Team</strong></p>
+            """
         }
     }
 }
 
-# =====================================================================
-# CORE SENDER FUNCTION
-# =====================================================================
 async def send_email_via_brevo(to_email: str, subject: str, html_content: str):
     if not BREVO_API_KEY or not SENDER_EMAIL:
         logger.warning(f"Cấu hình Email (BREVO_API_KEY hoặc SENDER_EMAIL) bị thiếu. Bỏ qua gửi email cho {to_email}")
@@ -282,9 +303,6 @@ async def send_email_via_brevo(to_email: str, subject: str, html_content: str):
         except Exception as e:
             logger.error(f"Error sending email to {to_email}: {e}")
 
-# =====================================================================
-# EMAIL TRIGGERS
-# =====================================================================
 def send_verification_email(background_tasks: BackgroundTasks, to: str, name: str, token: str, lang: str = "vi"):
     base_url = FRONTEND_URL.rstrip('/')
     link = f"{base_url}/verify?token={token}"
@@ -385,6 +403,27 @@ def send_interview_email(
         location=location,
         meeting_link_html=meeting_link_html,
         message_html=message_html
+    )
+
+    html_content = get_base_html(inner_html)
+    background_tasks.add_task(send_email_via_brevo, to, subject, html_content)
+
+def send_ticket_reply_email(
+    background_tasks: BackgroundTasks,
+    to: str,
+    name: str,
+    ticket_subject: str,
+    ticket_id: str,
+    reply_message: str,
+    lang: str = "vi"
+):
+    template = I18N_MESSAGES.get(lang, I18N_MESSAGES["vi"])["ticket_reply"]
+    subject = template["subject"].format(subject=ticket_subject)
+
+    inner_html = template["content"].format(
+        name=name,
+        ticket_id=ticket_id,
+        reply_message=reply_message
     )
 
     html_content = get_base_html(inner_html)

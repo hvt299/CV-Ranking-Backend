@@ -26,6 +26,7 @@ pymupdf
 python-docx
 pdfplumber
 numpy==1.26.4
+unidecode
 
 # --- Data Processing & Web Parsing ---
 pandas

@@ -11,7 +11,12 @@ from app.repositories.company_repository import CompanyRepository
 from app.repositories.job_repository import JobRepository
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.report_repository import ReportRepository
+from app.repositories.support_ticket_repository import SupportTicketRepository
+from app.repositories.blog_repository import BlogRepository
 from app.schemas.report_schema import ReportCreate
+from app.schemas.support_ticket_schema import SupportTicketCreate
+from app.schemas.common_schema import TicketStatus
+from fastapi import HTTPException
 from datetime import datetime, timezone
 
 router = APIRouter(prefix="/api/v1/system", tags=["System & Master Data"])
@@ -24,6 +29,53 @@ async def submit_report(payload: ReportCreate):
     
     _id = await ReportRepository.create(record)
     return {"status": "success", "message": "Cảm ơn bạn đã báo cáo. Chúng tôi sẽ xem xét và xử lý sớm nhất có thể."}
+
+@router.post("/support-tickets")
+async def submit_support_ticket(payload: SupportTicketCreate):
+    record = payload.model_dump()
+    record["status"] = TicketStatus.OPEN.value
+    record["created_at"] = datetime.now(timezone.utc)
+    record["updated_at"] = datetime.now(timezone.utc)
+    
+    _id = await SupportTicketRepository.create(record)
+    return {"status": "success", "message": "Gửi yêu cầu hỗ trợ thành công. Chúng tôi sẽ phản hồi qua email của bạn sớm nhất."}
+
+@router.get("/blogs")
+async def get_public_blogs(
+    category: Optional[str] = Query(None, description="Lọc theo danh mục"),
+    limit: int = Query(10, ge=1, le=50)
+):
+    query = {"is_published": True}
+    if category and category != "all":
+        query["category"] = category
+        
+    blogs = await BlogRepository.find_many(query, sort=[("created_at", -1)], limit=limit)
+    
+    result = []
+    for b in blogs:
+        b["id"] = str(b["_id"])
+        del b["_id"]
+        b.pop("content_html", None)
+        result.append(b)
+        
+    return {"status": "success", "data": result}
+
+@router.get("/blogs/{slug}")
+async def get_blog_detail(slug: str):
+    blog = await BlogRepository.find_one({"slug": slug, "is_published": True})
+    if not blog:
+        raise HTTPException(status_code=404, detail="Bài viết không tồn tại hoặc đã bị ẩn")
+        
+    await BlogRepository.update_custom(
+        {"_id": blog["_id"]},
+        {"$inc": {"view_count": 1}}
+    )
+    
+    blog["id"] = str(blog["_id"])
+    del blog["_id"]
+    blog["view_count"] = blog.get("view_count", 0) + 1
+    
+    return {"status": "success", "data": blog}
 
 @router.get("/locations")
 async def get_locations():
