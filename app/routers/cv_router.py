@@ -98,7 +98,7 @@ async def upload_cv_to_pool(
         if existing_cv:
             return {
                 "message": "CV đã tồn tại trong Kho hồ sơ của công ty",
-                "cv_id": str(existing_cv["_id"]),
+                "cv_id": str(existing_cv.get("id")),
                 "candidate_email": candidate_email,
                 "is_existing": True
             }
@@ -402,7 +402,7 @@ async def update_application_status(
                     "title": title,
                     "message": message,
                     "type": notif_type,
-                    "entity_ref": {"type": "application", "id": str(current_app["_id"])},
+                    "entity_ref": {"type": "application", "id": str(current_app.get("id"))},
                     "payload": {
                         "job_title": job.get("title", "Vị trí tuyển dụng") if job else "Vị trí tuyển dụng",
                         "status": update_data.status.value
@@ -451,11 +451,6 @@ async def delete_cv_from_pool(cv_id: str, scope_filter: dict = Depends(get_scope
 async def get_talent_pool(scope_filter: dict = Depends(get_scope_filter)):
     try:
         cvs = await CVRepository.find_all(scope_filter, projection={"raw_text": 0, "cv_vector_ref": 0}, limit=500)
-        
-        for cv in cvs:
-            cv["id"] = str(cv["_id"])
-            del cv["_id"]
-                
         return cvs
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -499,8 +494,7 @@ async def get_recent_applications(scope_filter: dict = Depends(get_scope_filter)
         
         result = []
         for app in applications:
-            app["id"] = str(app["_id"])
-            del app["_id"]
+            app["id"] = app.get("id") or str(app.pop("_id", ""))
             
             cv_snap = app.get("cv_snapshot", {})
             app["filename"] = cv_snap.get("filename", "CV Ẩn")
@@ -602,9 +596,6 @@ async def bookmark_candidate_to_pool(
 @router.get("/talent-pool/bookmarked", dependencies=[Depends(require_hr)])
 async def get_bookmarked_candidates(current_user: CurrentUser = Depends(require_hr)):
     records = await TalentPoolRepository.get_by_company_id(current_user.company_id)
-    for r in records:
-        r["id"] = str(r["_id"])
-        del r["_id"]
     return records
 
 @router.post("/talent-pool/discover", dependencies=[Depends(require_hr)])
@@ -640,7 +631,7 @@ async def discover_talents(
         if not cv_data_raw:
             continue
             
-        cv_id = str(cv_data_raw.get("_id"))
+        cv_id = str(cv_data_raw.get("id"))
             
         cv_record_for_scoring = {
             "raw_text": cv_data_raw.get("raw_text", ""),

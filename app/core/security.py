@@ -38,7 +38,7 @@ def get_password_hash(password: str):
 
 def build_token_payload(user: dict) -> dict:
     return {
-        "sub": str(user["_id"]),
+        "sub": str(user.get("id")),
         "email": user["email"],
         "role": user.get("role", UserRole.APPLICANT.value),
         "company_id": user.get("company_id"),
@@ -78,7 +78,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> CurrentUser:
         )
 
     return CurrentUser(
-        id=str(user["_id"]),
+        id=str(user.get("id")),
         email=user["email"],
         role=UserRole(user.get("role", UserRole.APPLICANT.value)),
         company_id=user.get("company_id"),

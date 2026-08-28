@@ -50,15 +50,7 @@ async def get_public_blogs(
         query["category"] = category
         
     blogs = await BlogRepository.find_many(query, sort=[("created_at", -1)], limit=limit)
-    
-    result = []
-    for b in blogs:
-        b["id"] = str(b["_id"])
-        del b["_id"]
-        b.pop("content_html", None)
-        result.append(b)
-        
-    return {"status": "success", "data": result}
+    return {"status": "success", "data": blogs}
 
 @router.get("/blogs/{slug}")
 async def get_blog_detail(slug: str):
@@ -67,14 +59,11 @@ async def get_blog_detail(slug: str):
         raise HTTPException(status_code=404, detail="Bài viết không tồn tại hoặc đã bị ẩn")
         
     await BlogRepository.update_custom(
-        {"_id": blog["_id"]},
+        {"_id": blog.get("id")},
         {"$inc": {"view_count": 1}}
     )
     
-    blog["id"] = str(blog["_id"])
-    del blog["_id"]
     blog["view_count"] = blog.get("view_count", 0) + 1
-    
     return {"status": "success", "data": blog}
 
 @router.get("/locations")
@@ -85,7 +74,7 @@ async def get_locations():
     result = []
     for loc in locations:
         result.append({
-            "id": str(loc["_id"]),
+            "id": loc.get("id"),
             "code": loc.get("code"),
             "name": loc.get("name"),
             "version": loc.get("version", "old")
@@ -118,14 +107,7 @@ async def search_skills(
         query["$and"] = conditions
         
     skills = await SkillRepository.find_many(query, limit=50)
-    
-    result = []
-    for sk in skills:
-        sk["id"] = str(sk["_id"])
-        del sk["_id"]
-        result.append(sk)
-        
-    return result
+    return skills
 
 @router.get("/locations/{parent_code}/children")
 async def get_sub_locations(parent_code: str):
@@ -135,7 +117,7 @@ async def get_sub_locations(parent_code: str):
     result = []
     for loc in locations:
         result.append({
-            "id": str(loc["_id"]),
+            "id": loc.get("id"),
             "code": loc.get("code"),
             "name": loc.get("name"),
             "parent_code": loc.get("parent_code"),

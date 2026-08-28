@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from app.middleware.rate_limit import limiter
 from datetime import datetime, timezone, timedelta
 from bson import ObjectId
@@ -21,13 +21,7 @@ async def get_active_plans(target: TargetAudience):
         "target_audience": target.value,
         "is_active": True
     }, sort=[("current_price", 1)])
-    
-    result = []
-    for p in plans:
-        p["id"] = str(p["_id"])
-        del p["_id"]
-        result.append(p)
-    return {"status": "success", "data": result}
+    return {"status": "success", "data": plans}
 
 @router.get("/my-plan")
 async def get_my_plan(current_user: CurrentUser = Depends(get_current_user)):
@@ -72,7 +66,7 @@ async def get_my_plan(current_user: CurrentUser = Depends(get_current_user)):
 
 @router.post("/checkout/{plan_code}")
 @limiter.limit("20/day")
-async def create_checkout_session(request: Request, plan_code: str, current_user: CurrentUser = Depends(require_hr)):
+async def create_checkout_session(request: Request, response: Response, plan_code: str, current_user: CurrentUser = Depends(require_hr)):
     plan = await SubscriptionPlanRepository.find_one({"plan_code": plan_code, "is_active": True})
     if not plan:
         raise HTTPException(status_code=404, detail="Gói cước không tồn tại hoặc đã ngừng bán")
@@ -148,7 +142,7 @@ async def sepay_webhook(request: Request):
         {"_id": ObjectId(company_id)},
         {
             "$set": {
-                "current_plan_id": str(plan["_id"]),
+                "current_plan_id": str(plan.get("id")),
                 "current_period_start": new_period_start,
                 "current_period_end": new_period_end
             },

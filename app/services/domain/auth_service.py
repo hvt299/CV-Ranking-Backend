@@ -162,7 +162,7 @@ class AuthService:
         reset_token = secrets.token_hex(32)
         hashed_token = hashlib.sha256(reset_token.encode()).hexdigest()
 
-        await UserRepository.update(str(user["_id"]), {
+        await UserRepository.update(str(user.get("id")), {
             "reset_password_token": hashed_token,
             "reset_password_expires": datetime.now(timezone.utc) + timedelta(minutes=15)
         })
@@ -183,7 +183,7 @@ class AuthService:
 
         hashed_pw = get_password_hash(payload.new_password)
         await UserRepository.update_custom(
-            {"_id": user["_id"]},
+            {"_id": ObjectId(user.get("id"))},
             {"$set": {"hashed_password": hashed_pw}, "$unset": {"reset_password_token": "", "reset_password_expires": ""}}
         )
         return {"message": "Mật khẩu đã được đặt lại thành công! Bạn có thể đăng nhập."}
@@ -264,11 +264,11 @@ class AuthService:
 
             if update_fields:
                 update_fields["updated_at"] = datetime.now(timezone.utc)
-                await UserRepository.update(str(user["_id"]), update_fields)
+                await UserRepository.update(str(user.get("id")), update_fields)
                 user.update(update_fields)
 
         if user.get("role") == UserRole.APPLICANT.value or user.get("role") == UserRole.APPLICANT:
-             background_tasks.add_task(AuthService.merge_ghost_profiles, str(user["_id"]), user.get("email"))
+             background_tasks.add_task(AuthService.merge_ghost_profiles, str(user.get("id")), user.get("email"))
 
         return {"access_token": create_access_token(build_token_payload(user)), "token_type": "bearer"}
 
@@ -388,7 +388,7 @@ class AuthService:
                 profile_update["updated_at"] = datetime.now(timezone.utc)
                 existing_profile = await ApplicantProfileRepository.get_by_user_id(user_id)
                 if existing_profile:
-                    await ApplicantProfileRepository.update(str(existing_profile["_id"]), profile_update)
+                    await ApplicantProfileRepository.update(str(existing_profile.get("id")), profile_update)
                 else:
                     profile_update.update({"user_id": user_id, "created_at": datetime.now(timezone.utc), "deleted_at": None})
                     await ApplicantProfileRepository.create(profile_update)
@@ -418,12 +418,12 @@ class AuthService:
                 return
 
             for cv in ghost_cvs:
-                cv_id = str(cv["_id"])
+                cv_id = str(cv.get("id"))
                 await CVRepository.update(cv_id, {"owner_user_id": user_id})
 
                 ghost_apps = await ApplicationRepository.find_all({"cv_id": cv_id, "source": ApplicationSource.HR_SOURCED.value}, limit=None)
                 for app in ghost_apps:
-                    await ApplicationRepository.update(str(app["_id"]), {"applicant_user_id": user_id})
+                    await ApplicationRepository.update(str(app.get("id")), {"applicant_user_id": user_id})
 
             print(f"[Ghost Merge] Đã hòa mạng {len(ghost_cvs)} CV cho user {email}")
         except Exception as e:

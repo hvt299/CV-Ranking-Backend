@@ -32,8 +32,8 @@ class AnalyticsService:
         prev_jobs_created = await JobRepository.count_documents({"company_id": company_id, "created_at": {"$gte": sixty_days_ago, "$lt": thirty_days_ago}})
 
         jobs = await JobRepository.find_many({"company_id": company_id}, projection={"_id": 1, "title": 1})
-        job_ids = [str(j["_id"]) for j in jobs]
-        job_dict = {str(j["_id"]): j.get("title", "Chiến dịch ẩn") for j in jobs}
+        job_ids = [str(j.get("id")) for j in jobs]
+        job_dict = {str(j.get("id")): j.get("title", "Chiến dịch ẩn") for j in jobs}
         
         cur_cvs = await ApplicationRepository.count_documents({"job_id": {"$in": job_ids}})
         prev_cvs = await ApplicationRepository.count_documents({"job_id": {"$in": job_ids}, "created_at": {"$lt": thirty_days_ago}})
@@ -160,10 +160,10 @@ class AnalyticsService:
             }
 
         jobs = await JobRepository.find_many({"company_id": company_id}, projection={"_id": 1})
-        job_ids = [str(j["_id"]) for j in jobs]
+        job_ids = [str(j.get("id")) for j in jobs]
 
         raw_funnel = await ApplicationRepository.get_funnel_stats(job_ids)
-        funnel_dict = {item["_id"]: item["count"] for item in raw_funnel}
+        funnel_dict = {item.get("id"): item["count"] for item in raw_funnel}
         total_cv = sum(funnel_dict.values())
         pass_ai = total_cv - funnel_dict.get(ApplicationStatus.NEW.value, 0) - funnel_dict.get(ApplicationStatus.REJECTED.value, 0)
         interview = funnel_dict.get(ApplicationStatus.INTERVIEW.value, 0)
@@ -179,7 +179,7 @@ class AnalyticsService:
         raw_ai = await ApplicationRepository.get_ai_score_distribution(job_ids)
         score_chart = []
         for bucket in raw_ai:
-            bound = bucket["_id"]
+            bound = bucket.get("id")
             count = bucket["count"]
             if bound == 0: score_chart.append({"name": "Chưa đạt (<50đ)", "value": count, "color": "var(--color-error-500)"})
             elif bound == 50: score_chart.append({"name": "Khá (50-80đ)", "value": count, "color": "var(--color-warning-500)"})
@@ -200,7 +200,7 @@ class AnalyticsService:
             {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "applied_at": {"$gte": now - timedelta(days=14)}}},
             {"$group": {"_id": {"$dateToString": {"format": "%d/%m", "date": "$applied_at"}}, "count": {"$sum": 1}}}
         ])
-        trend_dict = {item["_id"]: item["count"] for item in raw_trend}
+        trend_dict = {item.get("id"): item["count"] for item in raw_trend}
         for day in trend_chart:
             day["cv_count"] = trend_dict.get(day["date"], 0)
 
@@ -235,7 +235,7 @@ class AnalyticsService:
         
         recent_list = []
         for comp in recent_pending:
-            comp["id"] = str(comp["_id"])
+            comp["id"] = str(comp.get("id"))
             del comp["_id"]
             recent_list.append(comp)
 
@@ -260,7 +260,7 @@ class AnalyticsService:
         
         status_chart = []
         for item in raw_company_status:
-            status = item["_id"]
+            status = item.get("id")
             count = item["count"]
             if status == CompanyStatus.VERIFIED.value:
                 status_chart.append({"name": "Đã duyệt", "value": count, "color": "var(--color-success-500)"})
@@ -280,13 +280,13 @@ class AnalyticsService:
             {"$match": {"deleted_at": None, "created_at": {"$gte": now - timedelta(days=14)}}},
             {"$group": {"_id": {"$dateToString": {"format": "%d/%m", "date": "$created_at"}}, "count": {"$sum": 1}}}
         ])
-        user_dict = {item["_id"]: item["count"] for item in raw_users}
+        user_dict = {item.get("id"): item["count"] for item in raw_users}
 
         raw_companies = await CompanyRepository.aggregate_companies([
             {"$match": {"deleted_at": None, "created_at": {"$gte": now - timedelta(days=14)}}},
             {"$group": {"_id": {"$dateToString": {"format": "%d/%m", "date": "$created_at"}}, "count": {"$sum": 1}}}
         ])
-        comp_dict = {item["_id"]: item["count"] for item in raw_companies}
+        comp_dict = {item.get("id"): item["count"] for item in raw_companies}
 
         for day in growth_chart:
             day["users"] = user_dict.get(day["date"], 0)

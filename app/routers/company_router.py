@@ -18,7 +18,7 @@ from app.repositories.administrative_unit_repository import AdministrativeUnitRe
 import re
 from app.middleware.subscription import require_tier
 from app.middleware.rate_limit import limiter
-from fastapi import Request
+from fastapi import Request, Response
 from pydantic import ValidationError
 from bson import ObjectId
 
@@ -125,7 +125,7 @@ async def parse_address_heuristic(raw_address: str) -> dict:
 
 @router.get("/lookup-tax/{tax_code}")
 @limiter.limit("10/minute")
-async def lookup_tax_code(request: Request, tax_code: str):
+async def lookup_tax_code(request: Request, response: Response, tax_code: str):
     url = f"https://api.vietqr.io/v2/business/{tax_code}"
     
     try:
@@ -158,22 +158,13 @@ async def lookup_tax_code(request: Request, tax_code: str):
 async def get_company_members(current_user: CurrentUser = Depends(require_hr)):
     projection = {"hashed_password": 0, "reset_password_token": 0, "reset_password_expires": 0}
     members = await UserRepository.find_many({"company_id": current_user.company_id}, projection=projection, limit=100)
-    
-    result = []
-    for m in members:
-        m["id"] = str(m["_id"])
-        del m["_id"]
-        result.append(m)
-    return result
+    return members
 
 @router.get("/settings", dependencies=[Depends(require_hr)])
 async def get_company_settings(current_user: CurrentUser = Depends(require_hr)):
     company = await CompanyRepository.get_by_id(current_user.company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Không tìm thấy dữ liệu công ty")
-    
-    company["id"] = str(company["_id"])
-    del company["_id"]
     return company
 
 @router.patch("/settings", dependencies=[Depends(require_hr)])
@@ -221,6 +212,7 @@ async def update_company_settings(
 @limiter.limit("20/day")
 async def invite_hr_member(
     request: Request,
+    response: Response,
     background_tasks: BackgroundTasks,
     payload: InviteMemberPayload = Body(...), 
     current_user: CurrentUser = Depends(require_hr)
@@ -294,7 +286,7 @@ async def get_public_companies():
     
     result = []
     for comp in companies:
-        comp["id"] = str(comp["_id"])
+        comp["id"] = comp.get("id") or str(comp.pop("_id", ""))
         result.append(comp)
         
     return result
@@ -309,8 +301,6 @@ async def get_public_company_detail(company_id: str):
     company = await CompanyRepository.find_one({"_id": obj_id, "status": CompanyStatus.VERIFIED.value})
     if not company:
         raise HTTPException(status_code=404, detail="Không tìm thấy công ty hoặc công ty chưa được xác thực")
-        
-    company["id"] = str(company["_id"])
     
     current_views = company.get("view_count", 0)
     current_profile_views = company.get("profile_view_count", 0)
@@ -345,9 +335,6 @@ async def create_department(
 @router.get("/departments", response_model=List[DepartmentResponse], dependencies=[Depends(require_hr)])
 async def get_departments(current_user: CurrentUser = Depends(require_hr)):
     depts = await DepartmentRepository.get_by_company_id(current_user.company_id)
-    for d in depts:
-        d["id"] = str(d["_id"])
-        del d["_id"]
     return depts
 
 @router.patch("/departments/{dept_id}", dependencies=[Depends(require_hr)])

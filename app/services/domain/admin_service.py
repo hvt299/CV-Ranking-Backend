@@ -42,13 +42,7 @@ class AdminService:
             "reset_password_expires": 0
         }
         users = await UserRepository.find_many({}, projection=projection, limit=500)
-        
-        result = []
-        for u in users:
-            u["id"] = str(u["_id"])
-            del u["_id"]
-            result.append(u)
-        return result
+        return users
 
     @staticmethod
     async def update_user_role(user_id: str, payload, current_admin):
@@ -103,13 +97,7 @@ class AdminService:
             query["status"] = status
             
         companies = await CompanyRepository.find_many(query, limit=500)
-        
-        result = []
-        for c in companies:
-            c["id"] = str(c["_id"])
-            del c["_id"]
-            result.append(c)
-        return result
+        return companies
 
     @staticmethod
     async def verify_company(company_id: str, action, current_admin):
@@ -226,8 +214,7 @@ class AdminService:
         
         result = []
         for lg in logs:
-            lg["id"] = str(lg["_id"])
-            del lg["_id"]
+            lg["id"] = lg.get("id") or str(lg.pop("_id", ""))
             result.append(lg)
             
         total_pages = math.ceil(total_items / page_size) if total_items > 0 else 1
@@ -331,8 +318,7 @@ class AdminService:
     async def get_system_settings():
         doc = await SystemSettingsRepository.find_one({"setting_type": "global_config"})
         if doc:
-            doc["id"] = str(doc["_id"])
-            del doc["_id"]
+            doc["id"] = str(doc.get("id"))
             return {"status": "success", "data": doc}
         return {"status": "success", "data": {}}
 
@@ -485,9 +471,6 @@ class AdminService:
             query["target_type"] = target_type
             
         reports = await ReportRepository.find_many(query, sort=[("created_at", -1)], limit=200)
-        for r in reports:
-            r["id"] = str(r["_id"])
-            del r["_id"]
         return {"status": "success", "data": reports}
 
     @staticmethod
@@ -549,9 +532,6 @@ class AdminService:
             query["category"] = category
             
         tickets = await SupportTicketRepository.find_many(query, sort=[("created_at", -1)], limit=200)
-        for t in tickets:
-            t["id"] = str(t["_id"])
-            del t["_id"]
         return {"status": "success", "data": tickets}
 
     @staticmethod

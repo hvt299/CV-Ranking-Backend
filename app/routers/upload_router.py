@@ -5,7 +5,7 @@ from app.schemas.common_schema import UserRole, CompanyStatus
 from datetime import datetime, timezone
 from app.repositories.company_repository import CompanyRepository
 from app.middleware.rate_limit import limiter
-from fastapi import Request
+from fastapi import Request, Response
 
 router = APIRouter(prefix="/api/v1/upload", tags=["Upload"])
 
@@ -15,6 +15,7 @@ MAX_FILE_SIZE = 5 * 1024 * 1024
 @limiter.limit("50/day")
 async def upload_general_file(
     request: Request,
+    response: Response,
     file: UploadFile = File(..., description="File tải lên (PDF, JPG, PNG)"),
     current_user = Depends(get_current_user)
 ):
@@ -35,6 +36,7 @@ async def upload_general_file(
 @limiter.limit("10/day")
 async def upload_kyc_document(
     request: Request,
+    repsonse: Response,
     file: UploadFile = File(..., description="Ảnh/PDF giấy phép ĐKKD"),
     current_user = Depends(get_current_user)
 ):

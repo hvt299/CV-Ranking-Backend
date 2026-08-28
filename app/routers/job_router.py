@@ -18,7 +18,7 @@ from app.services.vector_engine import compress_jd_data, get_embedding, get_top_
 from app.services.audit_service import log_action
 from app.services.analytics_service import AnalyticsService
 from app.middleware.rate_limit import limiter
-from fastapi import Request
+from fastapi import Request, Response
 import os
 import httpx
 from app.core.security import require_qstash_signature
@@ -62,7 +62,7 @@ async def rescore_all_applications_for_job(job_id: str, jd_data: dict):
         
         new_score = score_cv(cv_data_for_scoring, jd_data)
         
-        await ApplicationRepository.update_by_query({"_id": app["_id"]}, {"$set": {"ai_score": new_score}})
+        await ApplicationRepository.update_by_query({"_id": ObjectId(app.get("id"))}, {"$set": {"ai_score": new_score}})
     print(f"Background Task Hoàn tất: Đã chấm lại {len(applications)} CV cho Job {job_id}")
 
 @router.post("/")
@@ -144,7 +144,7 @@ async def get_my_jobs(scope_filter: dict = Depends(get_scope_filter)):
     
     result = []
     for job in jobs:
-        job["id"] = str(job["_id"])
+        job["id"] = job.get("id") or str(job.pop("_id", ""))
         
         job["company_name"] = job.get("company_info", {}).get("name", "Công ty Ẩn danh")
         
@@ -164,14 +164,13 @@ async def get_job_detail(job_id: str, scope_filter: dict = Depends(get_scope_fil
     job = await JobRepository.find_one({"_id": obj_id, **scope_filter})
     if not job:
         raise HTTPException(status_code=404, detail="Không tìm thấy chiến dịch hoặc bạn không có quyền xem")
-        
-    job["id"] = str(job["_id"])
     return job
 
 @router.put("/{job_id}")
 @limiter.limit("20/day")
 async def update_job(
     request: Request,
+    response: Response,
     job_id: str,
     background_tasks: BackgroundTasks,
     job_update: JobCreateEnterprise = Body(...),
@@ -284,8 +283,7 @@ async def get_job_ranking(job_id: str, scope_filter: dict = Depends(get_scope_fi
         try:
             company = await CompanyRepository.get_by_id(job["company_id"])
             if company:
-                company["id"] = str(company["_id"])
-                del company["_id"]
+                company["id"] = company.get("id") or str(company.pop("_id", ""))
                 company_info = company
         except:
             pass
@@ -304,8 +302,7 @@ async def get_job_ranking(job_id: str, scope_filter: dict = Depends(get_scope_fi
     
     leaderboard = []
     for app in applications:
-        app["id"] = str(app["_id"])
-        del app["_id"]
+        app["id"] = app.get("id") or str(app.pop("_id", ""))
         
         cv_snap = app.get("cv_snapshot", {})
         app["candidate_info"] = cv_snap.get("candidate_info", {})
@@ -315,8 +312,7 @@ async def get_job_ranking(job_id: str, scope_filter: dict = Depends(get_scope_fi
         
         leaderboard.append(app)
         
-    job["id"] = str(job["_id"])
-    del job["_id"]
+    job["id"] = job.get("id") or str(job.pop("_id", ""))
     
     return {
         "job_info": job,
@@ -364,7 +360,7 @@ async def get_public_jobs():
     
     result = []
     for job in jobs:
-        job["id"] = str(job["_id"])
+        job["id"] = job.get("id") or str(job.pop("_id", ""))
         job["company_name"] = job.get("company_info", {}).get("name", "Công ty Ẩn danh")
         job.pop("company_info", None)
         result.append(job)
@@ -400,7 +396,7 @@ async def get_public_job_detail(job_id: str):
         raise HTTPException(status_code=404, detail="Không tìm thấy việc làm hoặc chiến dịch đã đóng")
         
     job = jobs[0]
-    job["id"] = str(job["_id"])
+    job["id"] = job.get("id") or str(job.pop("_id", ""))
     
     current_views = job.get("view_count", 0)
     await JobRepository.update_custom({"_id": obj_id}, {"$inc": {"view_count": 1}})

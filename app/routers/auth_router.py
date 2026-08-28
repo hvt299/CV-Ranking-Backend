@@ -1,6 +1,6 @@
 from typing import Optional
 import re
-from fastapi import APIRouter, Depends, Body, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, Body, BackgroundTasks, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field, field_validator
@@ -104,12 +104,12 @@ router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
 
 @router.post("/register", status_code=201)
 @limiter.limit("10/day")
-async def register_user(request: Request, background_tasks: BackgroundTasks, payload: RegisterRequest = Body(...)):
+async def register_user(request: Request, response: Response, background_tasks: BackgroundTasks, payload: RegisterRequest = Body(...)):
     return await AuthService.register(payload, background_tasks)
 
 @router.get("/verify")
 @limiter.limit("20/minute")
-async def verify_email(request: Request, token: str, background_tasks: BackgroundTasks):
+async def verify_email(request: Request, response: Response, token: str, background_tasks: BackgroundTasks):
     return await AuthService.verify(token, background_tasks)
 
 # =====================================================================
@@ -118,17 +118,17 @@ async def verify_email(request: Request, token: str, background_tasks: Backgroun
 
 @router.post("/login", response_model=Token)
 @limiter.limit("5/minute")
-async def login_for_access_token(request: Request, user_credentials: UserLogin = Body(...)):
+async def login_for_access_token(request: Request, response: Response, user_credentials: UserLogin = Body(...)):
     return await AuthService.login(user_credentials)
 
 @router.post("/forgot-password")
 @limiter.limit("5/day")
-async def forgot_password(request: Request, background_tasks: BackgroundTasks, email: str = Body(..., embed=True)):
+async def forgot_password(request: Request, response: Response, background_tasks: BackgroundTasks, email: str = Body(..., embed=True)):
     return await AuthService.forgot_password(email, background_tasks)
 
 @router.post("/reset-password")
 @limiter.limit("5/day")
-async def reset_password(request: Request, payload: ResetPasswordRequest):
+async def reset_password(request: Request, response: Response, payload: ResetPasswordRequest):
     return await AuthService.reset_password(payload)
 
 # =====================================================================
@@ -137,7 +137,7 @@ async def reset_password(request: Request, payload: ResetPasswordRequest):
 
 @router.post("/google")
 @limiter.limit("10/minute")
-async def google_login(request: Request, background_tasks: BackgroundTasks, social_request: SocialAuthRequest = Body(...)):
+async def google_login(request: Request, response: Response, background_tasks: BackgroundTasks, social_request: SocialAuthRequest = Body(...)):
     result = await AuthService.google_login(social_request, background_tasks)
     if result.get("action") == "require_role":
         return JSONResponse(status_code=202, content=result)
@@ -145,7 +145,7 @@ async def google_login(request: Request, background_tasks: BackgroundTasks, soci
 
 @router.post("/linkedin")
 @limiter.limit("10/minute")
-async def linkedin_login(request: Request, background_tasks: BackgroundTasks, social_request: SocialAuthRequest = Body(...)):
+async def linkedin_login(request: Request, response: Response, background_tasks: BackgroundTasks, social_request: SocialAuthRequest = Body(...)):
     result = await AuthService.linkedin_login(social_request, background_tasks)
     if result.get("action") == "require_role":
         return JSONResponse(status_code=202, content=result)

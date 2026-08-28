@@ -8,7 +8,7 @@ from app.repositories.interview_feedback_repository import InterviewFeedbackRepo
 from app.repositories.application_repository import ApplicationRepository
 from app.services.email_service import send_interview_email
 from app.middleware.rate_limit import limiter
-from fastapi import Request
+from fastapi import Request, Response
 
 router = APIRouter(prefix="/api/v1/interviews", tags=["Interview Management"])
 
@@ -16,6 +16,7 @@ router = APIRouter(prefix="/api/v1/interviews", tags=["Interview Management"])
 @limiter.limit("30/day")
 async def schedule_interview(
     request: Request,
+    response: Response,
     payload: InterviewCreate,
     background_tasks: BackgroundTasks,
     current_user: CurrentUser = Depends(require_hr)
@@ -90,13 +91,4 @@ async def get_interviews_for_application(
         raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển hợp lệ")
 
     interviews = await InterviewRepository.get_by_application_id(application_id)
-    for i in interviews:
-        i["id"] = str(i["_id"])
-        del i["_id"]
-        feedbacks = await InterviewFeedbackRepository.get_by_interview_id(i["id"])
-        for f in feedbacks:
-            f["id"] = str(f["_id"])
-            del f["_id"]
-        i["feedbacks"] = feedbacks
-
     return {"status": "success", "data": interviews}

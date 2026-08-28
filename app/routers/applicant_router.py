@@ -86,7 +86,7 @@ async def list_open_jobs():
         company_name = job.get("company_info", {}).get("name", "Công ty Ẩn danh")
         
         result.append({
-            "id": str(job["_id"]),
+            "id": job.get("id") or str(job.pop("_id", "")),
             "title": job.get("title"),
             "company_id": job.get("company_id"),
             "company_name": company_name,
@@ -160,9 +160,8 @@ async def my_applications(current_applicant: CurrentUser = Depends(require_appli
     
     result = []
     for a in apps:
-        a["id"] = str(a["_id"])
-        del a["_id"]
-                
+        a["id"] = a.get("id") or str(a.pop("_id", ""))
+        
         a["job_title"] = a.get("job_info", {}).get("title", "Chiến dịch đã xóa")
         a["company_name"] = a.get("company_info", {}).get("name", "Công ty Ẩn danh")
         
@@ -176,10 +175,6 @@ async def my_applications(current_applicant: CurrentUser = Depends(require_appli
 @router.get("/notifications")
 async def get_notifications(current_applicant: CurrentUser = Depends(require_applicant)):
     notifications = await NotificationRepository.find_all({"recipient_user_id": current_applicant.id}, limit=100)
-    for notification in notifications:
-        notification["id"] = str(notification["_id"])
-        del notification["_id"]
-    
     return notifications
 
 @router.patch("/notifications/{notification_id}/read")
@@ -385,7 +380,7 @@ async def apply_to_job(
     scoring_result = score_cv(cv_data_for_scoring, job)
 
     cv_snapshot = {
-        "cv_document_id": str(cv_doc["_id"]),
+        "cv_document_id": str(cv_doc.get("id")),
         "display_name": cv_doc.get("display_name", "CV Ứng tuyển"),
         "filename": cv_doc.get("filename"),
         "file_url": cv_doc.get("file_url", ""),
@@ -395,7 +390,7 @@ async def apply_to_job(
 
     app_record = {
         "job_id": job_id,
-        "cv_id": str(cv_doc["_id"]),
+        "cv_id": str(cv_doc.get("id")),
         "cv_snapshot": cv_snapshot,
         "company_id": job.get("company_id"),
         "applicant_user_id": current_applicant.id,
@@ -435,9 +430,6 @@ async def get_my_cv_library(current_applicant: CurrentUser = Depends(require_app
         projection={"raw_text": 0, "cv_vector_ref": 0},
         limit=10
     )
-    for cv in cvs:
-        cv["id"] = str(cv["_id"])
-        del cv["_id"]
     return cvs
 
 @router.post("/self-score")
@@ -536,9 +528,6 @@ async def save_company(
 @router.get("/saved-companies")
 async def get_saved_companies(current_applicant: CurrentUser = Depends(require_applicant)):
     records = await SavedCompanyRepository.get_by_applicant_id(current_applicant.id)
-    for r in records:
-        r["id"] = str(r["_id"])
-        del r["_id"]
     return records
 
 @router.delete("/saved-companies/{company_id}")
@@ -591,7 +580,7 @@ async def update_matching_preferences(
     update_data["updated_at"] = datetime.now(timezone.utc)
     
     await MatchingPreferencesRepository.update(
-        doc_id=str(existing_record["_id"]),
+        doc_id=str(existing_record.get("id")),
         update_data=update_data
     )
     
@@ -602,8 +591,6 @@ async def get_matching_preferences(current_applicant: CurrentUser = Depends(requ
     record = await MatchingPreferencesRepository.get_by_applicant_id(current_applicant.id)
     if not record:
         return {"status": "success", "data": None}
-    record["id"] = str(record["_id"])
-    del record["_id"]
     return {"status": "success", "data": record}
 
 @router.get("/notifications/unread-count")
