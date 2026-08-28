@@ -7,6 +7,15 @@ class BaseRepository:
     collection_name: str = None
 
     @classmethod
+    def _format_doc(cls, doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not doc:
+            return None
+        if "_id" in doc:
+            doc["id"] = str(doc["_id"])
+            del doc["_id"]
+        return doc
+
+    @classmethod
     def sanitize_payload(cls, payload: dict) -> dict:
         if not isinstance(payload, dict): 
             return payload
@@ -27,16 +36,20 @@ class BaseRepository:
     async def find_one(cls, query: dict, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
         db = get_db()
         query = cls._apply_soft_delete(query, include_deleted)
-        return await db[cls.collection_name].find_one(query)
+        doc = await db[cls.collection_name].find_one(query)
+        return cls._format_doc(doc)
 
     @classmethod
     async def get_by_id(cls, doc_id: str, extra_query: Optional[dict] = None, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+        if not ObjectId.is_valid(doc_id):
+            return None
         db = get_db()
         query = {"_id": ObjectId(doc_id)}
         if extra_query:
             query.update(extra_query)
         query = cls._apply_soft_delete(query, include_deleted)
-        return await db[cls.collection_name].find_one(query)
+        doc = await db[cls.collection_name].find_one(query)
+        return cls._format_doc(doc)
 
     @classmethod
     async def create(cls, data: dict) -> str:
@@ -46,6 +59,8 @@ class BaseRepository:
 
     @classmethod
     async def update(cls, doc_id: str, update_data: dict, extra_query: Optional[dict] = None, include_deleted: bool = False) -> int:
+        if not ObjectId.is_valid(doc_id):
+            return 0
         db = get_db()
         query = {"_id": ObjectId(doc_id)}
         if extra_query:
@@ -81,7 +96,8 @@ class BaseRepository:
         if fetch_limit:
             cursor = cursor.limit(fetch_limit)
 
-        return await cursor.to_list(length=fetch_limit)
+        docs = await cursor.to_list(length=fetch_limit)
+        return [cls._format_doc(doc) for doc in docs]
 
     @classmethod
     async def count_documents(cls, query: dict, include_deleted: bool = False) -> int:
@@ -97,6 +113,8 @@ class BaseRepository:
 
     @classmethod
     async def delete(cls, doc_id: str, extra_query: Optional[dict] = None, hard_delete: bool = False) -> int:
+        if not ObjectId.is_valid(doc_id):
+            return 0
         db = get_db()
         query = {"_id": ObjectId(doc_id)}
         if extra_query:
