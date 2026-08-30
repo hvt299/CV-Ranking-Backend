@@ -232,12 +232,6 @@ class AnalyticsService:
             sort=[("created_at", -1)],
             limit=5
         )
-        
-        recent_list = []
-        for comp in recent_pending:
-            comp["id"] = str(comp.get("id"))
-            del comp["_id"]
-            recent_list.append(comp)
 
         return {
             "overview_stats": {
@@ -246,7 +240,7 @@ class AnalyticsService:
                 "pending_kyc": {"value": pending_companies, "trend": 0, "is_up": False},
                 "active_jobs": {"value": total_jobs, "trend": 0, "is_up": True},
             },
-            "recent_pending_companies": recent_list
+            "recent_pending_companies": recent_pending
         }
 
     @classmethod

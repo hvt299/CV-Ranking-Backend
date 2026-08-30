@@ -321,7 +321,7 @@ async def get_job_ranking(job_id: str, scope_filter: dict = Depends(get_scope_fi
         "leaderboard": leaderboard
     }
 
-@router.get("/dashboard/metrics", dependencies=[Depends(require_tier("can_export_analytics"))])
+@router.get("/dashboard/metrics")
 async def get_dashboard_metrics(
     scope: str = Query("company", description="Góc nhìn: 'company' (Owner) hoặc 'me' (Member)"),
     current_user: CurrentUser = Depends(require_hr)

@@ -165,6 +165,10 @@ async def get_company_settings(current_user: CurrentUser = Depends(require_hr)):
     company = await CompanyRepository.get_by_id(current_user.company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Không tìm thấy dữ liệu công ty")
+        
+    if "current_plan_id" in company and company["current_plan_id"] is not None:
+        company["current_plan_id"] = str(company["current_plan_id"])
+        
     return company
 
 @router.patch("/settings", dependencies=[Depends(require_hr)])
@@ -287,6 +291,10 @@ async def get_public_companies():
     result = []
     for comp in companies:
         comp["id"] = comp.get("id") or str(comp.pop("_id", ""))
+        
+        if "current_plan_id" in comp and comp["current_plan_id"] is not None:
+            comp["current_plan_id"] = str(comp["current_plan_id"])
+            
         result.append(comp)
         
     return result
@@ -312,6 +320,9 @@ async def get_public_company_detail(company_id: str):
     
     company["view_count"] = current_views + 1
     company["profile_view_count"] = current_profile_views + 1
+    
+    if "current_plan_id" in company and company["current_plan_id"] is not None:
+        company["current_plan_id"] = str(company["current_plan_id"])
     
     return company
 

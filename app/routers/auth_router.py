@@ -2,7 +2,6 @@ from typing import Optional
 import re
 from fastapi import APIRouter, Depends, Body, BackgroundTasks, Request, Response
 from fastapi.responses import JSONResponse
-from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field, field_validator
 
 from app.middleware.rate_limit import limiter
@@ -182,8 +181,3 @@ async def get_current_user_profile(current_user: CurrentUser = Depends(get_curre
 @router.delete("/me/anonymize", status_code=200, tags=["Profile"])
 async def anonymize_account(current_user: CurrentUser = Depends(get_current_user)):
     return await AuthService.anonymize(current_user)
-
-@router.post("/docs-login", response_model=Token, include_in_schema=False)
-async def swagger_login(form_data: OAuth2PasswordRequestForm = Depends()):
-    user_credentials = UserLogin(email=form_data.username, password=form_data.password)
-    return await AuthService.login(user_credentials)

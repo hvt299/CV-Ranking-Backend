@@ -7,19 +7,19 @@ import jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
 from fastapi import Depends, HTTPException, status, Request
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from qstash import Receiver
 
 from app.schemas.common_schema import UserRole
 from app.repositories.user_repository import UserRepository
 
-JWT_SECRET = os.getenv("JWT_SECRET", "CVRanking@JWT")
+JWT_SECRET = os.environ["JWT_SECRET"]
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRATION_MINUTES", 1440))
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/docs-login")
+bearer_scheme = HTTPBearer()
 
 class CurrentUser(BaseModel):
     id: str
@@ -52,7 +52,8 @@ def create_access_token(data: dict):
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET, algorithm=ALGORITHM)
     return encoded_jwt
 
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> CurrentUser:
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)) -> CurrentUser:
+    token = credentials.credentials
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Không thể xác thực thông tin (Token không hợp lệ, đã hết hạn hoặc tài khoản bị khóa)",

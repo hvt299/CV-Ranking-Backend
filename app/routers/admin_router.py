@@ -74,7 +74,11 @@ async def update_user_status(user_id: str, payload: UpdateUserStatusRequest, cur
 # ==========================================
 @router.get("/companies", dependencies=[Depends(require_admin)])
 async def list_companies(status: Optional[str] = None):
-    return await AdminService.list_companies(status)
+    companies = await AdminService.list_companies(status)
+    for comp in companies:
+        if "current_plan_id" in comp and comp["current_plan_id"] is not None:
+            comp["current_plan_id"] = str(comp["current_plan_id"])
+    return companies
 
 @router.patch("/companies/{company_id}/verify")
 async def verify_company(

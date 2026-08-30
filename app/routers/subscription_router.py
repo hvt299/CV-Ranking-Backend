@@ -25,6 +25,17 @@ async def get_active_plans(target: TargetAudience):
 
 @router.get("/my-plan")
 async def get_my_plan(current_user: CurrentUser = Depends(get_current_user)):
+    if current_user.role == UserRole.ADMIN.value:
+        return {"status": "success", "data": {
+            "entity_type": "admin",
+            "entity_id": current_user.id,
+            "current_plan": "Quản trị viên (Unlimited)",
+            "current_plan_code": "admin_vip",
+            "credits_remaining": 9999999,
+            "period_start": None,
+            "period_end": None
+        }}
+
     plan_info = None
     if current_user.role in [UserRole.HR_OWNER.value, UserRole.HR_MEMBER.value]:
         company = await CompanyRepository.get_by_id(current_user.company_id)
@@ -37,8 +48,8 @@ async def get_my_plan(current_user: CurrentUser = Depends(get_current_user)):
         plan_info = {
             "entity_type": "company",
             "entity_id": current_user.company_id,
-            "current_plan": plan_data.get("name") if plan_data else "Gói Miễn phí (Free)",
-            "current_plan_code": plan_data.get("plan_code") if plan_data else "free",
+            "current_plan": plan_data.get("name") if plan_data else "HR Cơ bản",
+            "current_plan_code": plan_data.get("plan_code") if plan_data else "hr_free",
             "credits_remaining": company.get("credits_remaining", 0),
             "period_start": company.get("current_period_start"),
             "period_end": company.get("current_period_end")
@@ -55,8 +66,8 @@ async def get_my_plan(current_user: CurrentUser = Depends(get_current_user)):
         plan_info = {
             "entity_type": "applicant",
             "entity_id": current_user.id,
-            "current_plan": plan_data.get("name") if plan_data else "Gói Miễn phí (Free)",
-            "current_plan_code": plan_data.get("plan_code") if plan_data else "free",
+            "current_plan": plan_data.get("name") if plan_data else "Ứng viên Cơ bản",
+            "current_plan_code": plan_data.get("plan_code") if plan_data else "app_free",
             "credits_remaining": profile.get("credits_remaining", 0),
             "period_start": profile.get("current_period_start"),
             "period_end": profile.get("current_period_end")
@@ -133,7 +144,8 @@ async def sepay_webhook(request: Request):
 
     now = datetime.now(timezone.utc)
     new_period_start = now
-    new_period_end = now + timedelta(days=plan.get("billing_cycle_days", 30))
+    cycle_days = plan.get("billing_cycle_days", 30)
+    new_period_end = None if cycle_days == 0 else (now + timedelta(days=cycle_days))
     
     features = plan.get("features", {})
     granted_credits = features.get("monthly_ai_credits", 0)

@@ -18,6 +18,7 @@ from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.applicant_profile_repository import ApplicantProfileRepository
 from app.repositories.cv_repository import CVRepository
 from app.repositories.application_repository import ApplicationRepository
+from app.repositories.subscription_plan_repository import SubscriptionPlanRepository
 from app.services.audit_service import log_action
 from app.services.email_service import send_verification_email, send_reset_password_email
 from app.core.security import get_password_hash, verify_password, create_access_token, build_token_payload, JWT_SECRET, ALGORITHM
@@ -44,6 +45,16 @@ class AuthService:
             "status": CompanyStatus.PENDING_VERIFICATION.value,
             "created_at": datetime.now(timezone.utc)
         }
+
+        free_plan = await SubscriptionPlanRepository.find_one({"plan_code": "hr_free", "is_active": True})
+        if free_plan:
+            company_doc.update({
+                "current_plan_id": str(free_plan.get("id")),
+                "credits_remaining": free_plan.get("features", {}).get("monthly_ai_credits", 0),
+                "current_period_start": datetime.now(timezone.utc),
+                "current_period_end": None
+            })
+
         return await CompanyRepository.create(company_doc)
 
     @staticmethod
@@ -97,7 +108,18 @@ class AuthService:
         })
 
         if payload.role == UserRole.APPLICANT:
-            await ApplicantProfileRepository.create({"user_id": str(user_id), "created_at": datetime.now(timezone.utc)})
+            profile_data = {"user_id": str(user_id), "created_at": datetime.now(timezone.utc)}
+            
+            free_plan = await SubscriptionPlanRepository.find_one({"plan_code": "app_free", "is_active": True})
+            if free_plan:
+                profile_data.update({
+                    "current_plan_id": str(free_plan.get("id")),
+                    "credits_remaining": free_plan.get("features", {}).get("ai_credits", 0),
+                    "current_period_start": datetime.now(timezone.utc),
+                    "current_period_end": None
+                })
+                
+            await ApplicantProfileRepository.create(profile_data)
 
         verify_token = jwt.encode({"sub": str(user_id), "exp": datetime.now(timezone.utc) + timedelta(days=1)}, JWT_SECRET, algorithm=ALGORITHM)
         send_verification_email(background_tasks, payload.email, payload.full_name, verify_token)
@@ -239,7 +261,18 @@ class AuthService:
             user_id = await UserRepository.create(new_user)
             
             if role_val == UserRole.APPLICANT.value or role_val == UserRole.APPLICANT:
-                await ApplicantProfileRepository.create({"user_id": str(user_id), "created_at": datetime.now(timezone.utc), "deleted_at": None})
+                profile_data = {"user_id": str(user_id), "created_at": datetime.now(timezone.utc), "deleted_at": None}
+                
+                free_plan = await SubscriptionPlanRepository.find_one({"plan_code": "app_free", "is_active": True})
+                if free_plan:
+                    profile_data.update({
+                        "current_plan_id": str(free_plan.get("id")),
+                        "credits_remaining": free_plan.get("features", {}).get("ai_credits", 0),
+                        "current_period_start": datetime.now(timezone.utc),
+                        "current_period_end": None
+                    })
+                    
+                await ApplicantProfileRepository.create(profile_data)
                 
             user = await UserRepository.get_by_id(user_id)
 
