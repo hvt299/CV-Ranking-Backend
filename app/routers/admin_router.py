@@ -38,6 +38,7 @@ class TogglePlanStatusRequest(BaseModel):
 class SystemSettingsUpdate(BaseModel):
     industry_weights: Optional[dict] = None
     action_costs: Optional[dict] = None
+    payment_config: Optional[dict] = None
 
 class AdministrativeUnitUpdate(BaseModel):
     name: Optional[str] = None

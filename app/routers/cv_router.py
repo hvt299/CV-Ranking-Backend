@@ -16,6 +16,7 @@ from app.repositories.notification_repository import NotificationRepository
 from app.repositories.user_interactions_repository import TalentPoolRepository
 from app.repositories.applicant_profile_repository import ApplicantProfileRepository
 from app.repositories.quota_transaction_repository import QuotaTransactionRepository
+from app.repositories.cover_letter_repository import CoverLetterRepository
 
 from app.services.ai_scoring_service import AIScoringService
 from app.services.audit_service import log_action
@@ -34,6 +35,7 @@ MAX_FILE_SIZE = 5 * 1024 * 1024
 
 class MapCVRequest(BaseModel):
     job_id: str
+    cover_letter_id: Optional[str] = Field(default=None, description="ID của Thư giới thiệu (nếu HR có đính kèm thêm)")
 
 class MapBatchCVRequest(BaseModel):
     cv_ids: list[str]
@@ -198,9 +200,9 @@ async def map_cv_to_job(
         "source": ApplicationSource.HR_SOURCED.value,
         "status": ApplicationStatus.NEW.value,
         "ai_score": scoring_result,
-        "applied_at": datetime.now(timezone.utc)
+        "applied_at": datetime.now(timezone.utc),
+        "cover_letter_id": payload.cover_letter_id
     }
-
     app_id = await ApplicationRepository.create(application_record)
 
     return {
@@ -446,6 +448,41 @@ async def delete_cv_from_pool(cv_id: str, scope_filter: dict = Depends(get_scope
         return {"status": "success", "message": "Đã xóa vĩnh viễn CV khỏi hệ thống"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/cover-letters/upload")
+@limiter.limit("50/day")
+async def upload_cover_letter_for_candidate(
+    request: Request,
+    response: Response,
+    file: UploadFile = File(...),
+    current_user: CurrentUser = Depends(require_hr)
+):
+    """
+    API dành cho HR tải lên Thư giới thiệu (nhận từ nguồn ngoài) để đính kèm vào Application.
+    Không cần lưu vào Thư viện của HR, chỉ tạo bản ghi lấy ID.
+    """
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="Dung lượng file vượt quá 5MB.")
+        
+    file_url = await upload_file_to_cloudinary(content, file.filename)
+    
+    cl_doc = {
+        "display_name": f"Thư giới thiệu tải lên bởi HR - {file.filename}",
+        "filename": file.filename,
+        "file_url": file_url,
+        "owner_user_id": None,
+        "company_id": current_user.company_id,
+        "created_at": datetime.now(timezone.utc)
+    }
+    
+    cl_id = await CoverLetterRepository.create(cl_doc)
+    return {
+        "status": "success",
+        "cover_letter_id": str(cl_id),
+        "file_url": file_url,
+        "filename": file.filename
+    }
 
 @router.get("/pool", dependencies=[Depends(require_hr_or_admin)])
 async def get_talent_pool(scope_filter: dict = Depends(get_scope_filter)):

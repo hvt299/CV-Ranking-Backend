@@ -10,6 +10,8 @@ class TargetAudience(str, Enum):
 
 class HRFeatures(BaseModel):
     max_active_jobs: int = Field(default=3, description="Số lượng Job tối đa mở cùng lúc")
+    max_job_edits: int = Field(default=5, description="Giới hạn số lần sửa Job (chống lạm dụng API)")
+    max_rescores_per_job: int = Field(default=2, description="Giới hạn số lần chấm lại toàn bộ CV")
     monthly_ai_credits: int = Field(default=50, description="Credit AI để săn ứng viên/sinh câu hỏi")
     max_cv_parses_per_month: int = Field(default=50, description="Giới hạn parse CV do HR tự upload")
     can_use_reverse_matching: bool = Field(default=False, description="Tính năng Săn ứng viên")
@@ -18,6 +20,7 @@ class HRFeatures(BaseModel):
 
 class ApplicantFeatures(BaseModel):
     max_cv_uploads: int = Field(default=3, description="Số lượng CV tối đa lưu trong Library")
+    max_cover_letters_uploads: int = Field(default=3, description="Số lượng Thư giới thiệu tối đa lưu trong Library")
     max_job_applies_per_day: int = Field(default=10, description="Chống rải thảm (Spam Apply)")
     max_self_scores_per_day: int = Field(default=3, description="Chống lạm dụng AI Self-Score")
     ai_credits: int = Field(default=10, description="Dùng cho tính năng Premium như: AI Viết lại CV")
@@ -28,6 +31,7 @@ class SubscriptionPlanCreate(BaseModel):
     description: Optional[str] = Field(default=None, description="Mô tả ngắn, VD: Dành cho doanh nghiệp SMEs")
     badge: Optional[str] = Field(default=None, description="Nhãn dán góc, VD: Phổ biến nhất")
     display_order: int = Field(default=0, description="Thứ tự hiển thị trên UI")
+    tier_level: int = Field(default=0, description="Cấp độ gói cước (VD: 0=Free, 1=Basic, 2=Pro, 3=Enterprise)")
     target_audience: TargetAudience = Field(...)
     
     original_price: int = Field(default=0, ge=0)
@@ -44,6 +48,7 @@ class SubscriptionPlanUpdate(BaseModel):
     description: Optional[str] = None
     badge: Optional[str] = None
     display_order: Optional[int] = None
+    tier_level: Optional[int] = Field(None, description="Cấp độ gói cước")
     original_price: Optional[int] = Field(None, ge=0)
     current_price: Optional[int] = Field(None, ge=0)
     features: Optional[Dict] = None

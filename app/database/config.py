@@ -33,6 +33,7 @@ class Collections:
     QUOTA_TRANSACTIONS = "quota_transactions"
     SYSTEM_SETTINGS = "system_settings"
     APPLICANT_PROFILES = "applicant_profiles"
+    COVER_LETTERS = "cover_letters"
     COMPANY_REVIEWS = "company_reviews"
     SAVED_JOBS = "saved_jobs"
     SAVED_COMPANIES = "saved_companies"

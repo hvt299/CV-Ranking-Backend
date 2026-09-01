@@ -47,8 +47,15 @@ async def get_company_plan_features(company_id: str) -> dict:
             plan_id = None
 
     if not plan_id:
+        free_plan = await SubscriptionPlanRepository.find_one({"plan_code": "hr_free", "is_active": True})
+        if free_plan:
+            return free_plan.get("features", {})
+            
+        # Fallback cuối cùng phòng hờ DB bị xóa nhầm gói hr_free
         return {
-            "max_active_jobs": 3, 
+            "max_active_jobs": 3,
+            "max_job_edits": 5,
+            "max_rescores_per_job": 2,
             "monthly_ai_credits": 0,
             "max_cv_parses_per_month": 50,
             "can_use_reverse_matching": False, 
@@ -57,7 +64,11 @@ async def get_company_plan_features(company_id: str) -> dict:
         }
         
     plan = await SubscriptionPlanRepository.get_by_id(plan_id)
-    return plan.get("features", {}) if plan else {}
+    if not plan:
+        free_plan = await SubscriptionPlanRepository.find_one({"plan_code": "hr_free", "is_active": True})
+        return free_plan.get("features", {}) if free_plan else {}
+        
+    return plan.get("features", {})
 
 
 def require_tier(feature_key: str):

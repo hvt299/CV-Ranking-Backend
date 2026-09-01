@@ -4,6 +4,8 @@ from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 import re
 import os
+import urllib.parse
+from app.services.nlp_engine import GLOBAL_SYSTEM_SETTINGS
 
 from app.core.security import get_current_user, CurrentUser, require_hr
 from app.schemas.common_schema import UserRole
@@ -75,36 +77,92 @@ async def get_my_plan(current_user: CurrentUser = Depends(get_current_user)):
 
     return {"status": "success", "data": plan_info}
 
+@router.get("/transactions")
+async def get_transactions(current_user: CurrentUser = Depends(get_current_user)):
+    query = {}
+    if current_user.role in [UserRole.HR_OWNER.value, UserRole.HR_MEMBER.value]:
+        query["company_id"] = current_user.company_id
+    else:
+        query["user_id"] = current_user.id
+        
+    transactions = await QuotaTransactionRepository.find_many(query, sort=[("created_at", -1)], limit=100)
+    
+    for tx in transactions:
+        tx["id"] = tx.get("id") or str(tx.pop("_id", ""))
+        
+    return {"status": "success", "data": transactions}
+
 @router.post("/checkout/{plan_code}")
 @limiter.limit("20/day")
-async def create_checkout_session(request: Request, response: Response, plan_code: str, current_user: CurrentUser = Depends(require_hr)):
+# Bỏ require_hr để Applicant cũng được phép gọi API này tạo mã QR
+async def create_checkout_session(request: Request, response: Response, plan_code: str, current_user: CurrentUser = Depends(get_current_user)):
     plan = await SubscriptionPlanRepository.find_one({"plan_code": plan_code, "is_active": True})
     if not plan:
         raise HTTPException(status_code=404, detail="Gói cước không tồn tại hoặc đã ngừng bán")
-        
-    company = await CompanyRepository.get_by_id(current_user.company_id)
-    current_plan_id = company.get("current_plan_id")
     
-    if current_plan_id:
-        current_plan = await SubscriptionPlanRepository.get_by_id(current_plan_id)
-        if current_plan and current_plan.get("current_price", 0) > plan.get("current_price", 0):
-            raise HTTPException(
-                status_code=400, 
-                detail="Hệ thống không hỗ trợ giáng cấp (Downgrade) giữa chu kỳ. Vui lòng đợi gói hiện tại hết hạn."
-            )
+    # Validation cơ bản
+    target_audience = plan.get("target_audience")
+    if target_audience == "hr" and current_user.role not in [UserRole.HR_OWNER.value, UserRole.HR_MEMBER.value]:
+        raise HTTPException(status_code=403, detail="Gói cước này chỉ dành cho Doanh nghiệp")
+    if target_audience == "applicant" and current_user.role != UserRole.APPLICANT.value:
+        raise HTTPException(status_code=403, detail="Gói cước này chỉ dành cho Ứng viên")
+        
+    # Logic kiểm tra Hạ cấp (Downgrade) dựa trên tier_level
+    current_plan_id = None
+    current_period_end = None
+    
+    if target_audience == "hr":
+        entity = await CompanyRepository.get_by_id(current_user.company_id)
+    else:
+        entity = await ApplicantProfileRepository.get_by_user_id(current_user.id)
+        
+    if entity:
+        current_plan_id = entity.get("current_plan_id")
+        current_period_end = entity.get("current_period_end")
+        
+    if current_plan_id and current_period_end:
+        if isinstance(current_period_end, str):
+            current_period_end = datetime.fromisoformat(current_period_end.replace("Z", "+00:00"))
+        if current_period_end.tzinfo is None:
+            current_period_end = current_period_end.replace(tzinfo=timezone.utc)
+            
+        if datetime.now(timezone.utc) < current_period_end:
+            current_plan = await SubscriptionPlanRepository.get_by_id(current_plan_id)
+            if current_plan:
+                old_tier = current_plan.get("tier_level", 0)
+                new_tier = plan.get("tier_level", 0)
+                
+                if new_tier < old_tier:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"Không thể hạ cấp (Downgrade) do gói hiện tại vẫn còn hạn sử dụng. Vui lòng chờ gói cũ hết hạn để mua gói này."
+                    )
 
-    transfer_content = f"UPGRADE {current_user.company_id} {plan_code}".upper()
+    payment_config = GLOBAL_SYSTEM_SETTINGS.get("payment_config", {})
+    bank_id = payment_config.get("bank_id", "MB")
+    account_no = payment_config.get("account_no", "0123456789")
+    account_name = payment_config.get("account_name", "CONG TY ATS")
+    template = payment_config.get("template", "compact2")
+    
+    # ID Đích: HR dùng Company ID, Applicant dùng User ID
+    target_id = current_user.company_id if target_audience == "hr" else current_user.id
+    transfer_content = f"UPGRADE {target_id} {plan_code}".upper()
     amount = plan.get("current_price", 0)
+    
+    encoded_content = urllib.parse.quote(transfer_content)
+    encoded_name = urllib.parse.quote(account_name)
+    # Gắn biến template vào đường dẫn
+    qr_url = f"https://img.vietqr.io/image/{bank_id}-{account_no}-{template}.png?amount={amount}&addInfo={encoded_content}&accountName={encoded_name}"
     
     return {
         "status": "success",
         "data": {
             "amount": amount,
             "transfer_content": transfer_content,
-            "bank_account": "123456789",
-            "bank_name": "Vietcombank",
-            "account_name": "CTY TNHH CV RANKING",
-            "qr_url": f"https://img.vietqr.io/image/vcb-123456789-compact.png?amount={amount}&addInfo={transfer_content}&accountName=CV%20RANKING"
+            "bank_account": account_no,
+            "bank_name": bank_id,
+            "account_name": account_name,
+            "qr_url": qr_url
         }
     }
 
@@ -138,42 +196,56 @@ async def sepay_webhook(request: Request):
     if amount_paid < plan.get("current_price", 0):
         return {"status": "ignored", "message": "Số tiền chuyển không đủ mua gói"}
 
-    company = await CompanyRepository.get_by_id(company_id)
-    if not company:
-        return {"status": "ignored", "message": "Không tìm thấy công ty"}
-
+    target_id = match.group(1).lower()
+    target_audience = plan.get("target_audience")
+    
     now = datetime.now(timezone.utc)
-    new_period_start = now
     cycle_days = plan.get("billing_cycle_days", 30)
     new_period_end = None if cycle_days == 0 else (now + timedelta(days=cycle_days))
-    
     features = plan.get("features", {})
-    granted_credits = features.get("monthly_ai_credits", 0)
 
-    await CompanyRepository.update_custom(
-        {"_id": ObjectId(company_id)},
-        {
-            "$set": {
-                "current_plan_id": str(plan.get("id")),
-                "current_period_start": new_period_start,
-                "current_period_end": new_period_end
-            },
-            "$inc": {
-                "credits_remaining": granted_credits
+    if target_audience == "hr":
+        company = await CompanyRepository.get_by_id(target_id)
+        if not company: return {"status": "ignored", "message": "Không tìm thấy công ty"}
+        
+        granted_credits = features.get("monthly_ai_credits", 0)
+        await CompanyRepository.update_custom(
+            {"_id": ObjectId(target_id)},
+            {
+                "$set": {"current_plan_id": str(plan.get("id")), "current_period_start": now, "current_period_end": new_period_end},
+                "$inc": {"credits_remaining": granted_credits}
             }
-        }
-    )
-    
-    balance_after = company.get("credits_remaining", 0) + granted_credits
-    await QuotaTransactionRepository.create({
-        "company_id": company_id,
-        "user_id": "sepay_system",
-        "action_type": f"UPGRADE_{plan_code.upper()}",
-        "credit_cost": -granted_credits,
-        "balance_after": balance_after,
-        "amount_paid": amount_paid,
-        "transaction_reference": payload.get("referenceNumber"),
-        "created_at": now
-    })
+        )
+        balance_after = company.get("credits_remaining", 0) + granted_credits
+        await QuotaTransactionRepository.create({
+            "company_id": target_id,
+            "user_id": "sepay_system",
+            "action_type": f"UPGRADE_{plan_code.upper()}",
+            "credit_cost": -granted_credits,
+            "balance_after": balance_after,
+            "created_at": now
+        })
+        
+    elif target_audience == "applicant":
+        profile = await ApplicantProfileRepository.get_by_user_id(target_id)
+        if not profile: return {"status": "ignored", "message": "Không tìm thấy hồ sơ ứng viên"}
+        
+        granted_credits = features.get("ai_credits", 0)
+        await ApplicantProfileRepository.update_custom(
+            {"_id": ObjectId(profile.get("id"))},
+            {
+                "$set": {"current_plan_id": str(plan.get("id")), "current_period_start": now, "current_period_end": new_period_end},
+                "$inc": {"credits_remaining": granted_credits}
+            }
+        )
+        balance_after = profile.get("credits_remaining", 0) + granted_credits
+        await QuotaTransactionRepository.create({
+            "company_id": None,
+            "user_id": target_id,
+            "action_type": f"UPGRADE_{plan_code.upper()}",
+            "credit_cost": -granted_credits,
+            "balance_after": balance_after,
+            "created_at": now
+        })
 
-    return {"status": "success", "message": f"Kích hoạt thành công gói {plan_code} cho công ty {company_id}"}
+    return {"status": "success", "message": f"Kích hoạt thành công gói {plan_code}"}

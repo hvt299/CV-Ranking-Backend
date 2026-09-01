@@ -196,7 +196,15 @@ async def update_job(
     if not existing_job:
         raise HTTPException(status_code=404, detail="Không tìm thấy Job hoặc bạn không có quyền chỉnh sửa")
 
+    features = await get_company_plan_features(current_user.company_id)
+    max_edits = features.get("max_job_edits", 5)
+    current_edits = existing_job.get("edit_count", 0)
+    
+    if current_edits >= max_edits:
+        raise HTTPException(status_code=403, detail=f"Chiến dịch đã đạt giới hạn chỉnh sửa ({max_edits} lần). Nhằm tối ưu hệ thống AI, vui lòng tạo chiến dịch mới nếu thay đổi quá nhiều.")
+
     update_data = job_update.model_dump()
+    update_data["edit_count"] = current_edits + 1
     
     if current_user.role != UserRole.ADMIN:
         update_data.pop("is_hot", None)
@@ -237,11 +245,18 @@ async def update_job(
         after_state=after_state
     )
 
-    if QSTASH_TOKEN:
-        try:
-            target_webhook_url = f"{BACKEND_URL}/api/v1/jobs/internal/webhook/rescore"
-            async with httpx.AsyncClient() as client:
-                await client.post(
+    max_rescores = features.get("max_rescores_per_job", 2)
+    current_rescores = existing_job.get("rescore_count", 0)
+
+    if current_rescores < max_rescores:
+        # Cập nhật số lần rescore ngầm
+        await JobRepository.update_custom({"_id": ObjectId(job_id)}, {"$inc": {"rescore_count": 1}})
+        
+        if QSTASH_TOKEN:
+            try:
+                target_webhook_url = f"{BACKEND_URL}/api/v1/jobs/internal/webhook/rescore"
+                async with httpx.AsyncClient() as client:
+                    await client.post(
                     f"{QSTASH_URL}{target_webhook_url}",
                     headers={
                         "Authorization": f"Bearer {QSTASH_TOKEN}",
@@ -249,8 +264,8 @@ async def update_job(
                     },
                     json={"job_id": job_id}
                 )
-        except Exception as e:
-            print(f"[QStash Error] Không thể gửi lệnh rescore cho job {job_id}: {e}")
+            except Exception as e:
+                print(f"[QStash Error] Không thể gửi lệnh rescore cho job {job_id}: {e}")
     else:
         background_tasks.add_task(rescore_all_applications_for_job, job_id, update_data)
 
@@ -319,6 +334,23 @@ async def get_job_ranking(job_id: str, scope_filter: dict = Depends(get_scope_fi
         "company_info": company_info,
         "total_candidates": len(leaderboard),
         "leaderboard": leaderboard
+    }
+
+@router.get("/{job_id}/export", dependencies=[Depends(require_tier("can_export_analytics"))])
+async def export_job_analytics(
+    job_id: str, 
+    format: str = Query("excel", description="Định dạng: excel hoặc pdf"), 
+    scope_filter: dict = Depends(get_scope_filter)
+):
+    job = await JobRepository.get_by_id(job_id, extra_query=scope_filter)
+    if not job:
+        raise HTTPException(status_code=404, detail="Không tìm thấy chiến dịch tuyển dụng")
+        
+    # TODO: Tích hợp thư viện Pandas/ReportLab trả về StreamingResponse ở Phase 5
+    return {
+        "status": "success", 
+        "message": f"Yêu cầu xuất báo cáo {format.upper()} đã được tiếp nhận.",
+        "download_url": f"https://s3.cloud/reports/mock_{job_id}.{format}"
     }
 
 @router.get("/dashboard/metrics")

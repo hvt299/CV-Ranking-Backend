@@ -23,7 +23,8 @@ import json
 # ==========================================
 GLOBAL_SYSTEM_SETTINGS = {
     "industry_weights": {},
-    "action_costs": {}
+    "action_costs": {},
+    "payment_config": {}
 }
 
 DEFAULT_SYSTEM_SETTINGS = {
@@ -56,6 +57,12 @@ DEFAULT_SYSTEM_SETTINGS = {
         "HR_MAP_CV_AI_SCORE": 1,
         "HR_MAP_BATCH_CV_AI_SCORE": 1,
         "APPLICANT_SELF_SCORE": 1
+    },
+    "payment_config": {
+        "bank_id": "MB",
+        "account_no": "0123456789",
+        "account_name": "CONG TY TNHH ATS SYSTEM",
+        "template": "compact2"
     }
 }
 
@@ -77,7 +84,8 @@ async def refresh_system_settings():
         if doc:
             settings = {
                 "industry_weights": doc.get("industry_weights", {}),
-                "action_costs": doc.get("action_costs", {})
+                "action_costs": doc.get("action_costs", {}),
+                "payment_config": doc.get("payment_config", {})
             }
         else:
             logging.warning("WARNING: SYSTEM_SETTINGS trống. Tự động bơm cấu hình mặc định (Auto-Seed)!")
@@ -85,7 +93,8 @@ async def refresh_system_settings():
             await db[Collections.SYSTEM_SETTINGS].insert_one({
                 "setting_type": "global_config",
                 "industry_weights": settings["industry_weights"],
-                "action_costs": settings["action_costs"]
+                "action_costs": settings["action_costs"],
+                "payment_config": settings["payment_config"]
             })
             
         if redis:
@@ -93,6 +102,7 @@ async def refresh_system_settings():
                 
     GLOBAL_SYSTEM_SETTINGS["industry_weights"] = settings.get("industry_weights", {})
     GLOBAL_SYSTEM_SETTINGS["action_costs"] = settings.get("action_costs", {})
+    GLOBAL_SYSTEM_SETTINGS["payment_config"] = settings.get("payment_config", {})
     logging.info("Đã đồng bộ SYSTEM_SETTINGS từ Database/Redis vào Memory.")
 
 INDUSTRY_SKILL_MAP = {}

@@ -223,24 +223,35 @@ async def delete_notification(
 
 class ApplyJobRequest(BaseModel):
     cv_document_id: Optional[str] = Field(default=None, description="Để trống nếu muốn dùng CV Mặc định (1-Click Apply)")
-    cover_letter_text: Optional[str] = None
-    cover_letter_url: Optional[str] = None
+    cover_letter_id: Optional[str] = Field(default=None, description="ID của Thư giới thiệu (Optional)")
 
 class SelfScoreRequest(BaseModel):
     cv_document_id: str
     job_id: str
 
 async def get_applicant_plan_features(user_id: str) -> dict:
+    async def _get_free_features():
+        free_plan = await SubscriptionPlanRepository.find_one({"plan_code": "app_free", "is_active": True})
+        if free_plan:
+            return free_plan.get("features", {})
+        return {
+            "max_cv_uploads": 3, 
+            "max_cover_letters_uploads": 3, 
+            "max_job_applies_per_day": 10, 
+            "max_self_scores_per_day": 3, 
+            "ai_credits": 0
+        }
+
     profile = await ApplicantProfileRepository.get_by_user_id(user_id)
     if not profile:
-        return {"max_cv_uploads": 3, "max_job_applies_per_day": 10, "max_self_scores_per_day": 3}
+        return await _get_free_features()
     
     plan_id = profile.get("current_plan_id")
     if not plan_id:
-        return {"max_cv_uploads": 3, "max_job_applies_per_day": 10, "max_self_scores_per_day": 3}
+        return await _get_free_features()
         
     plan = await SubscriptionPlanRepository.get_by_id(plan_id)
-    return plan.get("features", {}) if plan else {"max_cv_uploads": 3, "max_job_applies_per_day": 10, "max_self_scores_per_day": 3}
+    return plan.get("features", {}) if plan else await _get_free_features()
 
 @router.post("/library/upload")
 @limiter.limit("20/day")
@@ -364,8 +375,12 @@ async def apply_to_job(
     if await ApplicationRepository.find_one({"applicant_user_id": current_applicant.id, "job_id": job_id}):
         raise HTTPException(status_code=400, detail="Bạn đã nộp hồ sơ cho vị trí này rồi!")
 
-    if payload.cover_letter_url and not is_safe_url(payload.cover_letter_url):
-        raise HTTPException(status_code=400, detail="URL Đính kèm không hợp lệ hoặc chứa mã độc (SSRF Blocked).")
+    # Validate Cover Letter ID nếu có truyền lên
+    if payload.cover_letter_id:
+        from app.repositories.cover_letter_repository import CoverLetterRepository
+        cl_doc = await CoverLetterRepository.find_one({"_id": ObjectId(payload.cover_letter_id), "owner_user_id": current_applicant.id})
+        if not cl_doc:
+            raise HTTPException(status_code=404, detail="Không tìm thấy Thư giới thiệu trong thư viện cá nhân.")
 
     if not payload.cv_document_id:
         cv_doc = await CVRepository.find_one({"owner_user_id": current_applicant.id, "is_primary": True})
@@ -398,8 +413,7 @@ async def apply_to_job(
         "status": ApplicationStatus.NEW.value,
         "ai_score": scoring_result,
         "applied_at": datetime.now(timezone.utc),
-        "cover_letter_text": payload.cover_letter_text,
-        "cover_letter_url": payload.cover_letter_url
+        "cover_letter_id": payload.cover_letter_id
     }
     app_id = await ApplicationRepository.create(app_record)
 
@@ -597,3 +611,67 @@ async def get_matching_preferences(current_applicant: CurrentUser = Depends(requ
 async def get_unread_notifications_count(current_applicant: CurrentUser = Depends(require_applicant)):
     count = await NotificationRepository.get_unread_count(current_applicant.id)
     return {"status": "success", "data": {"unread_count": count}}
+
+from app.repositories.cover_letter_repository import CoverLetterRepository
+
+@router.post("/cover-letters/upload")
+@limiter.limit("20/day")
+async def upload_cover_letter(
+    request: Request,
+    response: Response,
+    file: UploadFile = File(...),
+    display_name: str = Form("Thư giới thiệu của tôi"),
+    current_applicant: CurrentUser = Depends(require_applicant)
+):
+    # Lấy giới hạn từ gói cước
+    features = await get_applicant_plan_features(current_applicant.id)
+    max_uploads = features.get("max_cover_letters_uploads", 3)
+    
+    current_cl_count = await CoverLetterRepository.count_documents({"owner_user_id": current_applicant.id})
+    if current_cl_count >= max_uploads:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Thư viện của bạn đã đạt giới hạn {max_uploads} Thư giới thiệu. Vui lòng xóa bớt hoặc nâng cấp gói cước."
+        )
+
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="Dung lượng file vượt quá 5MB.")
+        
+    file_url = await upload_file_to_cloudinary(content, file.filename)
+    
+    cl_doc = {
+        "display_name": display_name,
+        "filename": file.filename,
+        "file_url": file_url,
+        "owner_user_id": current_applicant.id,
+        "created_at": datetime.now(timezone.utc)
+    }
+    
+    cl_id = await CoverLetterRepository.create(cl_doc)
+    return {
+        "status": "success",
+        "cover_letter_id": str(cl_id),
+        "file_url": file_url,
+        "filename": file.filename
+    }
+
+@router.get("/cover-letters")
+async def get_my_cover_letters(current_applicant: CurrentUser = Depends(require_applicant)):
+    letters = await CoverLetterRepository.find_all(
+        {"owner_user_id": current_applicant.id}, 
+        limit=10
+    )
+    return letters
+
+@router.delete("/cover-letters/{cl_id}")
+async def delete_cover_letter(cl_id: str, current_applicant: CurrentUser = Depends(require_applicant)):
+    cl_record = await CoverLetterRepository.find_one({"_id": ObjectId(cl_id), "owner_user_id": current_applicant.id})
+    if not cl_record:
+        raise HTTPException(status_code=404, detail="Không tìm thấy Thư giới thiệu")
+        
+    if cl_record.get("file_url"):
+        await delete_file_from_cloudinary(cl_record["file_url"])
+        
+    await CoverLetterRepository.delete(cl_id, scope_filter={"owner_user_id": current_applicant.id})
+    return {"status": "success", "message": "Đã xóa Thư giới thiệu khỏi thư viện cá nhân"}

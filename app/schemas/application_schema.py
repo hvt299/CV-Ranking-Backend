@@ -48,13 +48,9 @@ class ApplicationCreate(BaseModel):
         ...,
         description="ID của công ty quản lý job và application này"
     )
-    cover_letter_text: Optional[str] = Field(
+    cover_letter_id: Optional[str] = Field(
         default=None,
-        description="Nội dung thư giới thiệu (nhập tay)"
-    )
-    cover_letter_url: Optional[str] = Field(
-        default=None,
-        description="Link file đính kèm thư giới thiệu (PDF/DOCX)"
+        description="ID của Thư giới thiệu (từ Thư viện Cover Letter)"
     )
 
 class InterviewSchedule(BaseModel):

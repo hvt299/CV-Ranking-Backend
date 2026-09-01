@@ -20,8 +20,7 @@ class ApplicationDB(BaseModel):
     source: ApplicationSource
     company_id: str
     
-    cover_letter_text: Optional[str] = None
-    cover_letter_url: Optional[str] = None
+    cover_letter_id: Optional[str] = Field(default=None, description="Liên kết tới ID Thư giới thiệu gốc")
     
     ai_score: Optional[AIScore] = None
     status: ApplicationStatus = Field(default=ApplicationStatus.NEW)
