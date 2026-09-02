@@ -51,12 +51,13 @@ DEFAULT_SYSTEM_SETTINGS = {
         "default": (0.40, 0.30, 0.20, 0.10, 0.50)
     },
     "action_costs": {
-        "REVERSE_MATCHING": 10,
-        "AI_INTERVIEW_GEN": 2,
-        "HR_PARSE_CV": 1,
-        "HR_MAP_CV_AI_SCORE": 1,
-        "HR_MAP_BATCH_CV_AI_SCORE": 1,
-        "APPLICANT_SELF_SCORE": 1
+        "REVERSE_MATCHING": 5,            # Săn ứng viên (Giảm giá để dễ Upsell)
+        "AI_INTERVIEW_GEN": 2,            # Sinh câu hỏi phỏng vấn
+        "HR_PARSE_CV": 0,                 # Upload CV (Chỉ trừ quota)
+        "HR_MAP_CV_AI_SCORE": 0,          # Chấm điểm 1 CV (Chỉ trừ quota)
+        "HR_MAP_BATCH_CV_AI_SCORE": 0,    # Chấm điểm loạt CV (Chỉ trừ quota)
+        "APPLICANT_SELF_SCORE": 0,        # Ứng viên tự chấm (Giới hạn bằng quota 3 lần/ngày)
+        "APPLICANT_AI_CV_REVIEW": 1       # Tính năng AI Gợi ý/Sửa lỗi CV
     },
     "payment_config": {
         "bank_id": "MB",

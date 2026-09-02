@@ -53,14 +53,15 @@ async def get_company_plan_features(company_id: str) -> dict:
             
         # Fallback cuối cùng phòng hờ DB bị xóa nhầm gói hr_free
         return {
-            "max_active_jobs": 3,
+            "max_active_jobs": 1,
             "max_job_edits": 5,
             "max_rescores_per_job": 2,
             "monthly_ai_credits": 0,
-            "max_cv_parses_per_month": 50,
+            "max_cv_parses_per_month": 20,
             "can_use_reverse_matching": False, 
             "can_set_hot_job": False,
-            "can_export_analytics": False
+            "can_export_analytics": False,
+            "can_customize_ai_weights": False
         }
         
     plan = await SubscriptionPlanRepository.get_by_id(plan_id)

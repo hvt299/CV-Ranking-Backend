@@ -235,11 +235,13 @@ async def get_applicant_plan_features(user_id: str) -> dict:
         if free_plan:
             return free_plan.get("features", {})
         return {
-            "max_cv_uploads": 3, 
-            "max_cover_letters_uploads": 3, 
-            "max_job_applies_per_day": 10, 
+            "max_cv_uploads": 2, 
+            "max_cover_letters_uploads": 2, 
+            "max_job_applies_per_day": 5, 
             "max_self_scores_per_day": 3, 
-            "ai_credits": 0
+            "ai_credits": 0,
+            "has_pro_badge": False,
+            "can_use_ai_cv_review": False
         }
 
     profile = await ApplicantProfileRepository.get_by_user_id(user_id)

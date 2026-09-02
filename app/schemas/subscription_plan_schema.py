@@ -9,21 +9,24 @@ class TargetAudience(str, Enum):
     APPLICANT = "applicant"
 
 class HRFeatures(BaseModel):
-    max_active_jobs: int = Field(default=3, description="Số lượng Job tối đa mở cùng lúc")
+    max_active_jobs: int = Field(default=1, description="Số lượng Job tối đa mở cùng lúc")
     max_job_edits: int = Field(default=5, description="Giới hạn số lần sửa Job (chống lạm dụng API)")
     max_rescores_per_job: int = Field(default=2, description="Giới hạn số lần chấm lại toàn bộ CV")
-    monthly_ai_credits: int = Field(default=50, description="Credit AI để săn ứng viên/sinh câu hỏi")
-    max_cv_parses_per_month: int = Field(default=50, description="Giới hạn parse CV do HR tự upload")
+    monthly_ai_credits: int = Field(default=0, description="Credit AI để săn ứng viên/sinh câu hỏi")
+    max_cv_parses_per_month: int = Field(default=20, description="Giới hạn parse CV do HR tự upload")
     can_use_reverse_matching: bool = Field(default=False, description="Tính năng Săn ứng viên")
     can_set_hot_job: bool = Field(default=False)
     can_export_analytics: bool = Field(default=False)
+    can_customize_ai_weights: bool = Field(default=False, description="Tùy chỉnh 4 trọng số AI")
 
 class ApplicantFeatures(BaseModel):
-    max_cv_uploads: int = Field(default=3, description="Số lượng CV tối đa lưu trong Library")
-    max_cover_letters_uploads: int = Field(default=3, description="Số lượng Thư giới thiệu tối đa lưu trong Library")
-    max_job_applies_per_day: int = Field(default=10, description="Chống rải thảm (Spam Apply)")
+    max_cv_uploads: int = Field(default=2, description="Số lượng CV tối đa lưu trong Library")
+    max_cover_letters_uploads: int = Field(default=2, description="Số lượng Thư giới thiệu tối đa lưu trong Library")
+    max_job_applies_per_day: int = Field(default=5, description="Chống rải thảm (Spam Apply)")
     max_self_scores_per_day: int = Field(default=3, description="Chống lạm dụng AI Self-Score")
-    ai_credits: int = Field(default=10, description="Dùng cho tính năng Premium như: AI Viết lại CV")
+    ai_credits: int = Field(default=0, description="Dùng cho tính năng Premium như: AI Viết lại CV")
+    has_pro_badge: bool = Field(default=False, description="Huy hiệu ứng viên VIP/Premium")
+    can_use_ai_cv_review: bool = Field(default=False, description="Mở khóa AI sửa lỗi CV")
 
 class SubscriptionPlanCreate(BaseModel):
     plan_code: str = Field(..., description="VD: hr_free, hr_pro, app_free, app_premium")
