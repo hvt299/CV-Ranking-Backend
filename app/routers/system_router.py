@@ -19,6 +19,8 @@ from app.schemas.common_schema import TicketStatus
 from fastapi import HTTPException
 from datetime import datetime, timezone
 
+from app.services.nlp_engine import GLOBAL_SYSTEM_SETTINGS
+
 router = APIRouter(prefix="/api/v1/system", tags=["System & Master Data"])
 
 @router.post("/reports")
@@ -156,3 +158,8 @@ async def get_system_statistics():
         "total_jobs": total_jobs,
         "success_rate": success_rate
     }
+
+@router.get("/config/industry-weights")
+async def get_industry_weights():
+    weights = GLOBAL_SYSTEM_SETTINGS.get("industry_weights", {})
+    return {"status": "success", "data": weights}
