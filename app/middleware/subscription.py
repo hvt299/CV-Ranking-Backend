@@ -96,6 +96,10 @@ def require_credits(action_type: str):
                 detail=f"Hệ thống đang thiếu cấu hình bảng giá cho '{action_type}'. Chưa thể thực hiện lúc này."
             )
 
+        # Trạm gác thông minh: Nếu miễn phí (cost = 0), cho qua luôn không cần đụng DB
+        if actual_cost == 0:
+            return current_user
+
         success = await CompanyRepository.deduct_ai_credits(current_user.company_id, actual_cost)
         if not success:
             raise HTTPException(

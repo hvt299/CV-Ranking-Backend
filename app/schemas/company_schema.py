@@ -1,9 +1,14 @@
 from pydantic import BaseModel, Field, field_validator, EmailStr
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 import re
 from app.schemas.shared_schema import LocationDetail, KYCDocument
 from app.schemas.common_schema import CompanyStatus
+
+class SocialLinks(BaseModel):
+    facebook: Optional[str] = None
+    linkedin: Optional[str] = None
+    youtube: Optional[str] = None
 
 class CompanyCreate(BaseModel):
     name: str = Field(..., example="TechCorp VN")
@@ -25,6 +30,11 @@ class CompanyCreate(BaseModel):
     logo_url: Optional[str] = None
     banner_url: Optional[str] = None
     description: Optional[str] = Field(default=None, description="Giới thiệu công ty (trang public)")
+    
+    # Các trường mới bổ sung
+    gallery_urls: List[str] = Field(default_factory=list, description="Thư viện ảnh môi trường làm việc (Max 5)")
+    social_links: Optional[SocialLinks] = None
+    benefits: List[str] = Field(default_factory=list, description="Danh sách các phúc lợi nổi bật (Tags)")
     
     legal_representative_name: Optional[str] = None
     kyc_documents: List[KYCDocument] = Field(default_factory=list, description="Danh sách giấy tờ pháp lý")

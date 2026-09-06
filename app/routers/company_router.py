@@ -188,10 +188,25 @@ async def update_company_settings(
 
     update_data = {"updated_at": datetime.now(timezone.utc)}
 
-    allowed_string_fields = ["tax_code", "industry", "size", "website", "address", "license_file_url", "name", "logo_url", "banner_url"]
+    # Gỡ bỏ "industry", giữ lại các trường chuỗi khác
+    allowed_string_fields = ["tax_code", "size", "website", "address", "license_file_url", "name", "logo_url", "banner_url", "description"]
     for field in allowed_string_fields:
         if field in payload and payload[field] is not None:
             update_data[field] = str(payload[field]).strip()
+
+    # Xử lý đa ngành nghề (tối đa 3)
+    if "industries" in payload and isinstance(payload["industries"], list):
+        update_data["industries"] = payload["industries"][:3]
+
+    # Xử lý các trường mảng và object mới
+    if "gallery_urls" in payload and isinstance(payload["gallery_urls"], list):
+        update_data["gallery_urls"] = payload["gallery_urls"][:5] # Tối đa 5 ảnh
+        
+    if "benefits" in payload and isinstance(payload["benefits"], list):
+        update_data["benefits"] = payload["benefits"]
+
+    if "social_links" in payload and isinstance(payload["social_links"], dict):
+        update_data["social_links"] = payload["social_links"]
 
     if "location" in payload and payload["location"] is not None:
         try:

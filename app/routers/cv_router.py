@@ -488,7 +488,18 @@ async def upload_cover_letter_for_candidate(
 async def get_talent_pool(scope_filter: dict = Depends(get_scope_filter)):
     try:
         cvs = await CVRepository.find_all(scope_filter, projection={"raw_text": 0, "cv_vector_ref": 0}, limit=500)
-        return cvs
+        result = []
+        for cv in cvs:
+            # Chuyển đổi ObjectId thành String
+            cv["id"] = cv.get("id") or str(cv.pop("_id", ""))
+            
+            # Đảm bảo các trường tham chiếu khác (nếu đang ở dạng ObjectId) cũng được chuyển thành String
+            for key, value in cv.items():
+                if isinstance(value, ObjectId):
+                    cv[key] = str(value)
+                    
+            result.append(cv)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
