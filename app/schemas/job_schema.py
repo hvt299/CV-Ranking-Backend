@@ -113,3 +113,8 @@ class JobResponse(JobCreateEnterprise):
     view_count: Optional[int] = Field(default=0)
     save_count: Optional[int] = Field(default=0, description="Số lượt ứng viên bookmark job này")
     num_applications: Optional[int] = Field(default=0)
+    
+    slug: Optional[str] = None
+    is_hot_until: Optional[datetime] = None
+    edit_count: Optional[int] = Field(default=0)
+    rescore_count: Optional[int] = Field(default=0)

@@ -79,6 +79,7 @@ class AuditAction(str, Enum):
     REPORT_RESOLVED = "report_resolved"
     REPORT_REJECTED = "report_rejected"
     TICKET_STATUS_UPDATED = "ticket_status_updated"
+    TICKET_REPLY_SENT = "ticket_reply_sent"
     BLOG_CREATED = "blog_created"
     BLOG_UPDATED = "blog_updated"
     BLOG_DELETED = "blog_deleted"
@@ -97,6 +98,7 @@ class ReportTargetType(str, Enum):
 class TicketStatus(str, Enum):
     OPEN = "open"
     IN_PROGRESS = "in_progress"
+    WAITING_FOR_USER = "waiting_for_user"
     RESOLVED = "resolved"
     CLOSED = "closed"
 

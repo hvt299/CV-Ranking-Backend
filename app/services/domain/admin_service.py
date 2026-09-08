@@ -550,16 +550,20 @@ class AdminService:
             update_data["resolved_by_admin_id"] = current_admin.id
             update_data["resolved_at"] = datetime.now(timezone.utc)
             
+        if payload.reply_message:
+            update_data["reply_message"] = payload.reply_message
+            update_data["last_replied_at"] = datetime.now(timezone.utc)
+            
         await SupportTicketRepository.update(ticket_id, update_data)
         
         if payload.reply_message and ticket.get("email"):
-            update_data["reply_message"] = payload.reply_message
+            ticket_num = ticket.get("ticket_number", ticket_id)
             send_ticket_reply_email(
                 background_tasks=background_tasks,
                 to=ticket.get("email"),
                 name=ticket.get("full_name", "Khách hàng"),
                 ticket_subject=ticket.get("subject", "Không có tiêu đề"),
-                ticket_id=ticket_id,
+                ticket_id=ticket_num,
                 reply_message=payload.reply_message
             )
         
@@ -571,6 +575,17 @@ class AdminService:
             target_id=ticket_id,
             note=f"Admin cập nhật trạng thái Ticket thành {payload.status.value}"
         )
+        
+        if payload.reply_message:
+            await log_action(
+                actor_id=current_admin.id,
+                actor_role=current_admin.role,
+                action=AuditAction.TICKET_REPLY_SENT,
+                target_type="support_ticket",
+                target_id=ticket_id,
+                note=f"Admin đã gửi email phản hồi cho người dùng"
+            )
+
         return {"status": "success", "message": f"Đã cập nhật Ticket thành {payload.status.value}"}
 
     # ==========================================

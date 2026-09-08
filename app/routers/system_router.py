@@ -32,15 +32,38 @@ async def submit_report(payload: ReportCreate):
     _id = await ReportRepository.create(record)
     return {"status": "success", "message": "Cảm ơn bạn đã báo cáo. Chúng tôi sẽ xem xét và xử lý sớm nhất có thể."}
 
+from app.core.security import get_current_user_optional, CurrentUser
+from fastapi import Depends
+import uuid
+
 @router.post("/support-tickets")
-async def submit_support_ticket(payload: SupportTicketCreate):
+async def submit_support_ticket(
+    payload: SupportTicketCreate,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional)
+):
     record = payload.model_dump()
+    
+    # If user is authenticated, override user_id to prevent frontend spoofing
+    if current_user:
+        record["user_id"] = current_user.id
+        
     record["status"] = TicketStatus.OPEN.value
     record["created_at"] = datetime.now(timezone.utc)
     record["updated_at"] = datetime.now(timezone.utc)
     
+    # Generate unique ticket number: ATS-{timestamp}-{random_hex}
+    timestamp_hex = hex(int(datetime.now().timestamp()))[2:].upper()
+    random_hex = str(uuid.uuid4())[:4].upper()
+    record["ticket_number"] = f"ATS-{timestamp_hex}-{random_hex}"
+    
     _id = await SupportTicketRepository.create(record)
-    return {"status": "success", "message": "Gửi yêu cầu hỗ trợ thành công. Chúng tôi sẽ phản hồi qua email của bạn sớm nhất."}
+    return {
+        "status": "success", 
+        "message": "Gửi yêu cầu hỗ trợ thành công. Chúng tôi sẽ phản hồi qua email của bạn sớm nhất.",
+        "data": {
+            "ticket_number": record["ticket_number"]
+        }
+    }
 
 @router.get("/blogs")
 async def get_public_blogs(

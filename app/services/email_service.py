@@ -200,10 +200,10 @@ I18N_MESSAGES = {
             """
         },
         "ticket_reply": {
-            "subject": "Phản hồi yêu cầu hỗ trợ: {subject}",
+            "subject": "[ATS System] Phản hồi yêu cầu hỗ trợ #{ticket_id}",
             "content": f"""
                 <p style="font-size: 16px; margin: 0 0 16px;">Xin chào <strong>{{name}}</strong>,</p>
-                <p style="margin: 0 0 16px; color: {COLOR_TEXT_MUTED};">Cảm ơn bạn đã liên hệ với bộ phận hỗ trợ của ATS. Chúng tôi đã xem xét yêu cầu của bạn (Mã: <strong>#{str("{{ticket_id}}")[:8]}</strong>) và xin phản hồi như sau:</p>
+                <p style="margin: 0 0 16px; color: {COLOR_TEXT_MUTED};">Cảm ơn bạn đã liên hệ với bộ phận hỗ trợ của ATS. Chúng tôi đã xem xét yêu cầu của bạn (Mã: <strong>#{str("{{ticket_id}}")}</strong>) và xin phản hồi như sau:</p>
                 <div style="background-color: {COLOR_BACKGROUND}; border-left: 4px solid {COLOR_PRIMARY_600}; border-radius: 8px; padding: 16px 18px; margin: 20px 0; color: {COLOR_TEXT}; white-space: pre-wrap;">
                     {{reply_message}}
                 </div>
@@ -263,10 +263,10 @@ I18N_MESSAGES = {
             """
         },
         "ticket_reply": {
-            "subject": "Support Ticket Reply: {subject}",
+            "subject": "[ATS System] Support Ticket Reply #{ticket_id}",
             "content": f"""
                 <p style="font-size: 16px; margin: 0 0 16px;">Hello <strong>{{name}}</strong>,</p>
-                <p style="margin: 0 0 16px; color: {COLOR_TEXT_MUTED};">Thank you for contacting ATS Support. We have reviewed your request (Ticket ID: <strong>#{str("{{ticket_id}}")[:8]}</strong>) and here is our response:</p>
+                <p style="margin: 0 0 16px; color: {COLOR_TEXT_MUTED};">Thank you for contacting ATS Support. We have reviewed your request (Ticket ID: <strong>#{str("{{ticket_id}}")}</strong>) and here is our response:</p>
                 <div style="background-color: {COLOR_BACKGROUND}; border-left: 4px solid {COLOR_PRIMARY_600}; border-radius: 8px; padding: 16px 18px; margin: 20px 0; color: {COLOR_TEXT}; white-space: pre-wrap;">
                     {{reply_message}}
                 </div>
@@ -418,7 +418,7 @@ def send_ticket_reply_email(
     lang: str = "vi"
 ):
     template = I18N_MESSAGES.get(lang, I18N_MESSAGES["vi"])["ticket_reply"]
-    subject = template["subject"].format(subject=ticket_subject)
+    subject = template["subject"].format(ticket_id=ticket_id)
 
     inner_html = template["content"].format(
         name=name,

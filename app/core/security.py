@@ -86,6 +86,32 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(b
         department_id=user.get("department_id")
     )
 
+async def get_current_user_optional(request: Request) -> Optional[CurrentUser]:
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+        
+    token = auth_header.split(" ")[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+            
+        user = await UserRepository.get_by_id(user_id)
+        if not user or user.get("deleted_at") is not None or not user.get("is_active", True):
+            return None
+            
+        return CurrentUser(
+            id=str(user.get("id")),
+            email=user["email"],
+            role=UserRole(user.get("role", UserRole.APPLICANT.value)),
+            company_id=user.get("company_id"),
+            department_id=user.get("department_id")
+        )
+    except Exception:
+        return None
+
 async def require_admin(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
     if current_user.role != UserRole.ADMIN:
         raise HTTPException(
