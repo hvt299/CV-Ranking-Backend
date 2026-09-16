@@ -111,7 +111,8 @@ async def get_locations():
 @router.get("/skills")
 async def search_skills(
     q: Optional[str] = Query(None, description="Từ khóa tìm kiếm kỹ năng"),
-    industry: Optional[str] = Query(None, description="Lọc theo ngành nghề (Cross-filtering)")
+    industry: Optional[str] = Query(None, description="Lọc theo ngành nghề (Cross-filtering)"),
+    limit: int = Query(50, description="Giới hạn số kết quả")
 ):
     query = {}
     conditions = []
@@ -131,7 +132,7 @@ async def search_skills(
     if conditions:
         query["$and"] = conditions
         
-    skills = await SkillRepository.find_many(query, limit=50)
+    skills = await SkillRepository.find_many(query, limit=limit)
     return skills
 
 @router.get("/locations/{parent_code}/children")

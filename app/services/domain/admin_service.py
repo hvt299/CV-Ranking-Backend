@@ -520,6 +520,24 @@ class AdminService:
         )
         return {"status": "success", "message": "Đã khóa chiến dịch tuyển dụng vi phạm"}
 
+    @staticmethod
+    async def unlock_job(job_id: str, current_admin):
+        job = await JobRepository.get_by_id(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Không tìm thấy việc làm")
+            
+        await JobRepository.update(job_id, {"is_suspended": False})
+        
+        await log_action(
+            actor_id=current_admin.id,
+            actor_role=current_admin.role,
+            action=AuditAction.JOB_SUSPENDED,
+            target_type="job",
+            target_id=job_id,
+            note="Admin MỞ KHÓA chiến dịch tuyển dụng."
+        )
+        return {"status": "success", "message": "Đã mở khóa chiến dịch tuyển dụng"}
+
     # ==========================================
     # SUPPORT TICKETS
     # ==========================================

@@ -19,6 +19,7 @@ from app.repositories.subscription_plan_repository import SubscriptionPlanReposi
 from app.repositories.audit_repository import AuditRepository
 
 from app.services.audit_service import log_action
+from app.services.analytics_service import AnalyticsService
 from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
 from app.services.vector_engine import compress_cv_data, get_cv_embeddings, get_top_contributing_sentences
 from app.services.document_forensics import detect_hidden_text
@@ -173,19 +174,19 @@ async def my_applications(current_applicant: CurrentUser = Depends(require_appli
     return result
 
 @router.get("/notifications")
-async def get_notifications(current_applicant: CurrentUser = Depends(require_applicant)):
-    notifications = await NotificationRepository.find_all({"recipient_user_id": current_applicant.id}, limit=100)
+async def get_notifications(current_user: CurrentUser = Depends(get_current_user)):
+    notifications = await NotificationRepository.find_all({"recipient_user_id": current_user.id}, limit=100)
     return notifications
 
 @router.patch("/notifications/{notification_id}/read")
 async def mark_notification_read(
     notification_id: str,
-    current_applicant: CurrentUser = Depends(require_applicant)
+    current_user: CurrentUser = Depends(get_current_user)
 ):
     try:
         modified_count = await NotificationRepository.update(
             notif_id=notification_id, 
-            recipient_user_id=current_applicant.id, 
+            recipient_user_id=current_user.id, 
             update_data={"status": NotificationReadStatus.READ.value, "read_at": datetime.now(timezone.utc)}
         )
         if modified_count == 0:
@@ -196,9 +197,9 @@ async def mark_notification_read(
         raise HTTPException(status_code=400, detail="ID thông báo không hợp lệ")
 
 @router.patch("/notifications/read-all")
-async def mark_all_notifications_read(current_applicant: CurrentUser = Depends(require_applicant)):
+async def mark_all_notifications_read(current_user: CurrentUser = Depends(get_current_user)):
     modified_count = await NotificationRepository.update_many(
-        {"recipient_user_id": current_applicant.id, "status": NotificationReadStatus.UNREAD.value},
+        {"recipient_user_id": current_user.id, "status": NotificationReadStatus.UNREAD.value},
         {"status": NotificationReadStatus.READ.value, "read_at": datetime.now(timezone.utc)}
     )
     
@@ -210,10 +211,10 @@ async def mark_all_notifications_read(current_applicant: CurrentUser = Depends(r
 @router.delete("/notifications/{notification_id}")
 async def delete_notification(
     notification_id: str,
-    current_applicant: CurrentUser = Depends(require_applicant)
+    current_user: CurrentUser = Depends(get_current_user)
 ):
     try:
-        deleted_count = await NotificationRepository.delete(notif_id=notification_id, recipient_user_id=current_applicant.id)
+        deleted_count = await NotificationRepository.delete(notif_id=notification_id, recipient_user_id=current_user.id)
         if deleted_count == 0:
             raise HTTPException(status_code=404, detail="Không tìm thấy thông báo")
             
@@ -610,8 +611,8 @@ async def get_matching_preferences(current_applicant: CurrentUser = Depends(requ
     return {"status": "success", "data": record}
 
 @router.get("/notifications/unread-count")
-async def get_unread_notifications_count(current_applicant: CurrentUser = Depends(require_applicant)):
-    count = await NotificationRepository.get_unread_count(current_applicant.id)
+async def get_unread_notifications_count(current_user: CurrentUser = Depends(get_current_user)):
+    count = await NotificationRepository.get_unread_count(current_user.id)
     return {"status": "success", "data": {"unread_count": count}}
 
 from app.repositories.cover_letter_repository import CoverLetterRepository
@@ -677,3 +678,11 @@ async def delete_cover_letter(cl_id: str, current_applicant: CurrentUser = Depen
         
     await CoverLetterRepository.delete(cl_id, scope_filter={"owner_user_id": current_applicant.id})
     return {"status": "success", "message": "Đã xóa Thư giới thiệu khỏi thư viện cá nhân"}
+
+@router.get("/dashboard/metrics")
+async def get_applicant_dashboard_metrics(current_applicant: CurrentUser = Depends(require_applicant)):
+    metrics = await AnalyticsService.get_applicant_dashboard_metrics(current_applicant.id)
+    return {
+        "status": "success",
+        "data": metrics
+    }
