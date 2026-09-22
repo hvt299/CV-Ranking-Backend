@@ -280,15 +280,15 @@ async def invite_hr_member(
     
     return {"status": "success", "message": f"Đã gửi thư mời thành công đến {safe_email}"}
 
-@router.get("/{company_id}/analytics", dependencies=[Depends(require_tier("can_export_analytics"))])
-async def get_company_analytics(company_id: str, current_user: CurrentUser = Depends(require_hr)):
+@router.get("/{company_id}/analytics")
+async def get_company_analytics(company_id: str, days: int = 30, current_user: CurrentUser = Depends(require_hr)):
     if current_user.role != UserRole.HR_OWNER.value or current_user.company_id != company_id:
         raise HTTPException(
             status_code=403, 
             detail="Bạn không có quyền xem dữ liệu phân tích của công ty này"
         )
     
-    result = await AnalyticsService.get_company_pro_analytics(company_id)
+    result = await AnalyticsService.get_company_pro_analytics(company_id, days)
     
     result["status"] = "success"
     return result

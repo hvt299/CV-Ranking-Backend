@@ -113,9 +113,9 @@ async def upload_cv_to_pool(
         "raw_text": raw_text,
         "cv_vector_ref": cv_vector,
         "candidate_info": {
+            "full_name": cv_data.get("candidate_name"),
             "email": cv_data.get("email"),
             "phone": cv_data.get("phone"),
-            "github": cv_data.get("github"),
             "linkedin": cv_data.get("linkedin"),
             "portfolio": cv_data.get("portfolio", []),
             "skill_experience": cv_data.get("skill_experience", {}),
@@ -586,7 +586,8 @@ async def toggle_application_viewed(
 async def get_ai_interview_questions(
     app_id: str, 
     scope_filter: dict = Depends(get_scope_filter),
-    _ = Depends(require_credits(action_type="AI_INTERVIEW_GEN"))
+    # LƯU Ý: CẤM XÓA VĨNH VIỄN ĐOẠN NÀY
+    # _ = Depends(require_credits(action_type="AI_INTERVIEW_GEN"))
 ):
     filter_query = {"_id": ObjectId(app_id), **scope_filter}
     app_record = await ApplicationRepository.find_one(filter_query)

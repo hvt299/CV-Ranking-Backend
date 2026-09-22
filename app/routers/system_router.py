@@ -4,6 +4,8 @@ import re
 
 from app.repositories.administrative_unit_repository import AdministrativeUnitRepository
 from app.repositories.skill_repository import SkillRepository
+from app.repositories.language_repository import LanguageRepository
+from app.repositories.certification_repository import CertificationRepository
 from app.schemas.common_schema import AdminLevel, UserRole, CompanyStatus, JobStatus, ApplicationStatus
 
 from app.repositories.user_repository import UserRepository
@@ -106,6 +108,36 @@ async def get_locations():
         })
         
     result.sort(key=lambda x: x.get("name", ""))
+    return result
+
+@router.get("/languages")
+async def search_languages(q: Optional[str] = Query(None), limit: int = Query(50)):
+    query = {}
+    if q and q.strip():
+        regex_pattern = re.compile(f".*{re.escape(q.strip())}.*", re.IGNORECASE)
+        query["$or"] = [
+            {"canonical_name": regex_pattern},
+            {"aliases": regex_pattern}
+        ]
+    docs = await LanguageRepository.find_many(query, limit=limit)
+    result = []
+    for d in docs:
+        result.append(d)
+    return result
+
+@router.get("/certifications")
+async def search_certifications(q: Optional[str] = Query(None), limit: int = Query(50)):
+    query = {}
+    if q and q.strip():
+        regex_pattern = re.compile(f".*{re.escape(q.strip())}.*", re.IGNORECASE)
+        query["$or"] = [
+            {"canonical_name": regex_pattern},
+            {"aliases": regex_pattern}
+        ]
+    docs = await CertificationRepository.find_many(query, limit=limit)
+    result = []
+    for d in docs:
+        result.append(d)
     return result
 
 @router.get("/skills")

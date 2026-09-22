@@ -26,6 +26,8 @@ class Collections:
     AUDIT_LOGS = "audit_logs"
     DEPARTMENTS = "departments"
     SKILLS = "skills"
+    LANGUAGES = "languages"
+    CERTIFICATIONS = "certifications"
     ADMINISTRATIVE_UNITS = "administrative_units"
     REFRESH_TOKENS = "refresh_tokens"
     SUBSCRIPTION_PLANS = "subscription_plans"

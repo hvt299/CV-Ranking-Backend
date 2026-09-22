@@ -379,13 +379,13 @@ async def get_public_jobs():
                 "from": Collections.COMPANIES,
                 "let": {"c_id": {"$toObjectId": "$company_id"}},
                 "pipeline": [
-                    {"$match": {"$expr": {"$eq": ["$_id", "$$c_id"]}}},
+                    {"$match": {"$expr": {"$eq": ["$_id", "$$c_id"]}, "status": CompanyStatus.VERIFIED.value}},
                     {"$project": {"name": 1}}
                 ],
                 "as": "company_info"
             }
         },
-        {"$unwind": {"path": "$company_info", "preserveNullAndEmptyArrays": True}}
+        {"$unwind": {"path": "$company_info", "preserveNullAndEmptyArrays": False}}
     ]
     
     jobs = await JobRepository.aggregate_jobs(pipeline)
@@ -413,13 +413,13 @@ async def get_public_job_detail(job_id: str):
                 "from": Collections.COMPANIES,
                 "let": {"c_id": {"$toObjectId": "$company_id"}},
                 "pipeline": [
-                    {"$match": {"$expr": {"$eq": ["$_id", "$$c_id"]}}},
+                    {"$match": {"$expr": {"$eq": ["$_id", "$$c_id"]}, "status": CompanyStatus.VERIFIED.value}},
                     {"$project": {"name": 1}}
                 ],
                 "as": "company_info"
             }
         },
-        {"$unwind": {"path": "$company_info", "preserveNullAndEmptyArrays": True}}
+        {"$unwind": {"path": "$company_info", "preserveNullAndEmptyArrays": False}}
     ]
 
     jobs = await JobRepository.aggregate_jobs(pipeline)

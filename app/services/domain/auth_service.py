@@ -1,3 +1,32 @@
+
+import httpx
+import os
+from fastapi import HTTPException
+
+async def verify_turnstile(token: str):
+    secret = os.getenv('CLOUDFLARE_TURNSTILE_SECRET')
+    if not secret:
+        raise HTTPException(status_code=500, detail="Hệ thống chưa được cấu hình CLOUDFLARE_TURNSTILE_SECRET.")
+    
+    if not token:
+        raise HTTPException(status_code=400, detail="Lỗi bảo mật. Vui lòng xác nhận Captcha (Turnstile).")
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+                data={
+                    "secret": secret,
+                    "response": token
+                }
+            )
+            result = response.json()
+            if not result.get("success"):
+                raise HTTPException(status_code=400, detail="Xác thực người máy thất bại (Turnstile).")
+        except httpx.RequestError:
+            raise HTTPException(status_code=500, detail="Lỗi kết nối tới máy chủ xác thực.")
+    return True
+
 import secrets
 import hashlib
 import time
@@ -376,7 +405,7 @@ class AuthService:
             "job_title_internal": user.get("job_title_internal", ""),
             "extension_phone": user.get("extension_phone", ""),
             "current_location": profile.get("current_location", {}),
-            "github": profile.get("github", ""),
+            "portfolio": profile.get("portfolio", []),
             "linkedin": profile.get("linkedin", ""),
             "headline": profile.get("headline", ""),
             "expected_salary_min": profile.get("expected_salary_min"),

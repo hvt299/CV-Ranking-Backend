@@ -13,7 +13,7 @@ from app.repositories.job_repository import JobRepository
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.cv_repository import CVRepository
 from app.repositories.notification_repository import NotificationRepository
-from app.repositories.user_interactions_repository import SavedCompanyRepository, MatchingPreferencesRepository
+from app.repositories.user_interactions_repository import SavedCompanyRepository, MatchingPreferencesRepository, SavedJobRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.subscription_plan_repository import SubscriptionPlanRepository
 from app.repositories.audit_repository import AuditRepository
@@ -230,6 +230,14 @@ class SelfScoreRequest(BaseModel):
     cv_document_id: str
     job_id: str
 
+class AddCVUrlRequest(BaseModel):
+    url: str
+    display_name: str = Field(default="CV Của Tôi (Từ URL)")
+
+class AddCoverLetterUrlRequest(BaseModel):
+    url: str
+    display_name: str = Field(default="Thư giới thiệu (Từ URL)")
+
 async def get_applicant_plan_features(user_id: str) -> dict:
     async def _get_free_features():
         free_plan = await SubscriptionPlanRepository.find_one({"plan_code": "app_free", "is_active": True})
@@ -311,8 +319,11 @@ async def upload_cv_to_library(
         "raw_text": raw_text,
         "cv_vector_ref": cv_vector,
         "candidate_info": {
+            "full_name": cv_data.get("candidate_name"),
             "email": cv_data.get("email") or current_applicant.email,
             "phone": cv_data.get("phone"),
+            "linkedin": cv_data.get("linkedin"),
+            "portfolio": cv_data.get("portfolio", []),
             "education_level": cv_data.get("education_level", "Không đề cập"),
             "years_of_experience": cv_data.get("years_of_experience", 0),
             "skill_experience": cv_data.get("skill_experience", {}),
@@ -331,6 +342,57 @@ async def upload_cv_to_library(
         "cv_document_id": str(cv_id),
         "file_url": file_url,
         "filename": file.filename
+    }
+
+@router.post("/library/url")
+@limiter.limit("20/day")
+async def add_cv_via_url(
+    request: Request,
+    response: Response,
+    payload: AddCVUrlRequest,
+    current_applicant: CurrentUser = Depends(require_applicant)
+):
+    if not is_safe_url(payload.url):
+        raise HTTPException(status_code=400, detail="URL không hợp lệ hoặc không an toàn.")
+
+    features = await get_applicant_plan_features(current_applicant.id)
+    max_uploads = features.get("max_cv_uploads", 3)
+    
+    existing_cvs = await CVRepository.count_documents({"owner_user_id": current_applicant.id})
+    if existing_cvs >= max_uploads:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Thư viện của bạn đã đạt giới hạn {max_uploads} CV."
+        )
+
+    is_primary = True if existing_cvs == 0 else False
+    
+    cv_doc = {
+        "display_name": payload.display_name,
+        "is_primary": is_primary,
+        "filename": payload.url.split('/')[-1][:50] or "url_cv",
+        "file_url": payload.url,
+        "raw_text": "",
+        "cv_vector_ref": [],
+        "candidate_info": {
+            "email": current_applicant.email,
+            "education_level": "Không đề cập",
+            "years_of_experience": 0,
+            "job_hops": 1,
+            "gap_months": 0
+        },
+        "extracted_skills": [],
+        "owner_user_id": current_applicant.id,
+        "created_at": datetime.now(timezone.utc)
+    }
+    
+    cv_id = await CVRepository.create(cv_doc)
+    return {
+        "status": "success",
+        "cv_document_id": str(cv_id),
+        "file_url": payload.url,
+        "filename": cv_doc["filename"],
+        "message": "Đã thêm CV từ URL (Lưu ý: CV từ URL sẽ không được AI bóc tách tự động)"
     }
 
 @router.post("/jobs/{job_id}")
@@ -659,9 +721,47 @@ async def upload_cover_letter(
         "filename": file.filename
     }
 
+@router.post("/cover-letters/url")
+@limiter.limit("20/day")
+async def add_cover_letter_via_url(
+    request: Request,
+    response: Response,
+    payload: AddCoverLetterUrlRequest,
+    current_applicant: CurrentUser = Depends(require_applicant)
+):
+    if not is_safe_url(payload.url):
+        raise HTTPException(status_code=400, detail="URL không hợp lệ hoặc không an toàn.")
+
+    features = await get_applicant_plan_features(current_applicant.id)
+    max_uploads = features.get("max_cover_letters_uploads", 3)
+    
+    current_cl_count = await CoverLetterRepository.count_documents({"owner_user_id": current_applicant.id})
+    if current_cl_count >= max_uploads:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Thư viện của bạn đã đạt giới hạn {max_uploads} Thư giới thiệu."
+        )
+
+    cl_doc = {
+        "display_name": payload.display_name,
+        "filename": payload.url.split('/')[-1][:50] or "url_cover_letter",
+        "file_url": payload.url,
+        "owner_user_id": current_applicant.id,
+        "created_at": datetime.now(timezone.utc)
+    }
+    
+    cl_id = await CoverLetterRepository.create(cl_doc)
+    return {
+        "status": "success",
+        "cover_letter_id": str(cl_id),
+        "file_url": payload.url,
+        "filename": cl_doc["filename"],
+        "message": "Đã thêm Thư giới thiệu từ URL"
+    }
+
 @router.get("/cover-letters")
 async def get_my_cover_letters(current_applicant: CurrentUser = Depends(require_applicant)):
-    letters = await CoverLetterRepository.find_all(
+    letters = await CoverLetterRepository.find_many(
         {"owner_user_id": current_applicant.id}, 
         limit=10
     )
@@ -686,3 +786,86 @@ async def get_applicant_dashboard_metrics(current_applicant: CurrentUser = Depen
         "status": "success",
         "data": metrics
     }
+@router.post("/saved-jobs/{job_id}")
+async def save_job(job_id: str, current_applicant: CurrentUser = Depends(require_applicant)):
+    if await SavedJobRepository.check_saved(current_applicant.id, job_id):
+        return {"status": "success", "message": "Đã lưu từ trước"}
+    await SavedJobRepository.create({"user_id": current_applicant.id, "job_id": job_id})
+    from app.repositories.job_repository import JobRepository
+    from bson import ObjectId
+    await JobRepository.update_custom({"_id": ObjectId(job_id)}, {"$inc": {"save_count": 1}})
+    return {"status": "success", "message": "Đã lưu chiến dịch"}
+
+@router.delete("/saved-jobs/{job_id}")
+async def unsave_job(job_id: str, current_applicant: CurrentUser = Depends(require_applicant)):
+    record = await SavedJobRepository.find_one({"user_id": current_applicant.id, "job_id": job_id})
+    if record:
+        await SavedJobRepository.delete(str(record["_id"]))
+        from app.repositories.job_repository import JobRepository
+        from bson import ObjectId
+        await JobRepository.update_custom({"_id": ObjectId(job_id)}, {"$inc": {"save_count": -1}})
+    return {"status": "success", "message": "Đã bỏ lưu chiến dịch"}
+
+@router.get("/saved-jobs/list")
+async def get_saved_jobs(current_applicant: CurrentUser = Depends(require_applicant)):
+    saved = await SavedJobRepository.get_by_user_id(current_applicant.id)
+    job_ids = [s["job_id"] for s in saved]
+    from app.repositories.job_repository import JobRepository
+    from app.database.config import Collections
+    from bson import ObjectId
+    
+    if not job_ids:
+        return {"status": "success", "data": []}
+        
+    pipeline = [
+        {"$match": {"_id": {"$in": [ObjectId(jid) for jid in job_ids]}}},
+        {
+            "$lookup": {
+                "from": Collections.COMPANIES,
+                "let": {"c_id": {"$toObjectId": "$company_id"}},
+                "pipeline": [
+                    {"$match": {"$expr": {"$eq": ["$_id", "$$c_id"]}}},
+                    {"$project": {"name": 1}}
+                ],
+                "as": "company_info"
+            }
+        },
+        {"$unwind": {"path": "$company_info", "preserveNullAndEmptyArrays": True}}
+    ]
+    jobs = await JobRepository.aggregate_jobs(pipeline)
+    for j in jobs:
+        j["id"] = j.get("id") or str(j.pop("_id", ""))
+        j["company_name"] = j.get("company_info", {}).get("name", "Công ty Ẩn danh")
+        j.pop("company_info", None)
+    return {"status": "success", "data": jobs}
+
+@router.post("/saved-companies/{company_id}")
+async def save_company(company_id: str, current_applicant: CurrentUser = Depends(require_applicant)):
+    if await SavedCompanyRepository.check_saved(current_applicant.id, company_id):
+        return {"status": "success", "message": "Đã lưu từ trước"}
+    await SavedCompanyRepository.create({"applicant_user_id": current_applicant.id, "company_id": company_id})
+    from app.repositories.company_repository import CompanyRepository
+    from bson import ObjectId
+    await CompanyRepository.update_custom({"_id": ObjectId(company_id)}, {"$inc": {"save_count": 1}})
+    return {"status": "success", "message": "Đã lưu công ty"}
+
+@router.delete("/saved-companies/{company_id}")
+async def unsave_company(company_id: str, current_applicant: CurrentUser = Depends(require_applicant)):
+    record = await SavedCompanyRepository.find_one({"applicant_user_id": current_applicant.id, "company_id": company_id})
+    if record:
+        await SavedCompanyRepository.delete(str(record["_id"]))
+        from app.repositories.company_repository import CompanyRepository
+        from bson import ObjectId
+        await CompanyRepository.update_custom({"_id": ObjectId(company_id)}, {"$inc": {"save_count": -1}})
+    return {"status": "success", "message": "Đã bỏ lưu công ty"}
+
+@router.get("/saved-companies/list")
+async def get_saved_companies(current_applicant: CurrentUser = Depends(require_applicant)):
+    saved = await SavedCompanyRepository.get_by_applicant_id(current_applicant.id)
+    company_ids = [s["company_id"] for s in saved]
+    if not company_ids:
+        return {"status": "success", "data": []}
+    from app.repositories.company_repository import CompanyRepository
+    from bson import ObjectId
+    companies = await CompanyRepository.find_many({"_id": {"$in": [ObjectId(cid) for cid in company_ids]}})
+    return {"status": "success", "data": companies}

@@ -19,6 +19,7 @@ class CompanyDB(CompanyCreate):
     view_count: int = Field(default=0)
     profile_view_count: int = Field(default=0)
     follower_count: int = Field(default=0)
+    save_count: int = Field(default=0)
     
     avg_rating: float = Field(default=0.0)
     review_count: int = Field(default=0)

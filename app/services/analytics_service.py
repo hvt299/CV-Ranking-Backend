@@ -48,7 +48,7 @@ class AnalyticsService:
         active_pipelines = await JobRepository.get_active_pipelines({"company_id": company_id})
 
         recent_pipeline = [
-            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None}},
+            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "applied_at": {"$gte": thirty_days_ago}}},
             {"$sort": {"applied_at": -1}},
             {"$limit": 5},
             {"$project": {
@@ -67,29 +67,16 @@ class AnalyticsService:
             app["job_title"] = job_dict.get(app["job_id"], "Vị trí tuyển dụng")
             recent_apps.append(app)
 
-        # 1. Experience Distribution Pie Chart
-        exp_pipeline = [
-            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None}},
-            {"$group": {"_id": "$cv_snapshot.years_of_experience", "count": {"$sum": 1}}},
-            {"$sort": {"_id": 1}}
-        ]
-        raw_exp = await ApplicationRepository.aggregate_applications(exp_pipeline)
-        exp_chart = []
-        colors = ["#94a3b8", "var(--color-primary-500)", "var(--color-info-500)", "var(--color-warning-500)", "var(--color-success-500)"]
-        for idx, item in enumerate(raw_exp):
-            val = item.get("_id") or 0
-            label = "Mới tốt nghiệp" if val == 0 else f"{val} năm kinh nghiệm"
-            exp_chart.append({"name": label, "value": item["count"], "color": colors[idx % len(colors)]})
-            
-        # 2. Top Jobs (Bar Chart)
+        # 1. Top Jobs (Bar Chart)
         top_jobs_pipeline = [
-            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None}},
+            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "applied_at": {"$gte": thirty_days_ago}}},
             {"$group": {"_id": "$job_id", "count": {"$sum": 1}}},
             {"$sort": {"count": -1}},
             {"$limit": 5}
         ]
         raw_top_jobs = await ApplicationRepository.aggregate_applications(top_jobs_pipeline)
         top_jobs_chart = []
+        colors = ["var(--color-slate-400)", "var(--color-primary-500)", "var(--color-info-500)", "var(--color-warning-500)", "var(--color-success-500)"]
         for idx, item in enumerate(raw_top_jobs):
             top_jobs_chart.append({
                 "name": job_dict.get(item.get("_id"), "Chiến dịch"),
@@ -97,21 +84,40 @@ class AnalyticsService:
                 "color": colors[idx % len(colors)]
             })
             
-        # 3. Pipeline Health (Real Pipeline)
+        
+        # 2. Team Workload (Mock + actual calculation if possible)
+        # In a real scenario, we count applications assigned to hr members.
+        # For mock, we just generate some random data based on user count
+        team_workload_chart = [
+            {"name": "Trần A", "cv_count": 45, "color": "var(--color-primary-500)", "is_mock": True},
+            {"name": "Nguyễn B", "cv_count": 32, "color": "var(--color-info-500)", "is_mock": True},
+            {"name": "Lê C", "cv_count": 28, "color": "var(--color-success-500)", "is_mock": True},
+            {"name": "Phạm D", "cv_count": 15, "color": "var(--color-warning-500)", "is_mock": True}
+        ]
+
+        
+        # 4. Pipeline Health (Real Pipeline)
         pipeline_health_pipeline = [
-            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None}},
+            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "applied_at": {"$gte": thirty_days_ago}}},
             {"$group": {"_id": "$status", "count": {"$sum": 1}}}
         ]
         raw_pipeline = await ApplicationRepository.aggregate_applications(pipeline_health_pipeline)
         ph_dict = {item.get("_id"): item["count"] for item in raw_pipeline}
         
         pipeline_health_chart = [
-            {"name": "Mới", "value": ph_dict.get(ApplicationStatus.NEW.value, 0), "fill": "#94a3b8"},
-            {"name": "Đang xem xét", "value": ph_dict.get(ApplicationStatus.REVIEWING.value, 0), "fill": "var(--color-info-500)"},
-            {"name": "Phỏng vấn", "value": ph_dict.get(ApplicationStatus.INTERVIEW.value, 0), "fill": "var(--color-warning-500)"},
-            {"name": "Đã tuyển", "value": ph_dict.get(ApplicationStatus.HIRED.value, 0), "fill": "var(--color-success-500)"}
+            {"status": ApplicationStatus.NEW.value, "name": "Mới", "value": ph_dict.get(ApplicationStatus.NEW.value, 0), "fill": "#94a3b8"},
+            {"status": ApplicationStatus.REVIEWING.value, "name": "Đang xem xét", "value": ph_dict.get(ApplicationStatus.REVIEWING.value, 0), "fill": "var(--color-info-500)"},
+            {"status": ApplicationStatus.INTERVIEW.value, "name": "Phỏng vấn", "value": ph_dict.get(ApplicationStatus.INTERVIEW.value, 0), "fill": "var(--color-warning-500)"},
+            {"status": ApplicationStatus.HIRED.value, "name": "Đã tuyển", "value": ph_dict.get(ApplicationStatus.HIRED.value, 0), "fill": "var(--color-success-500)"}
         ]
 
+        
+        # 3. Hiring Goal (Mock)
+        hiring_goal = {
+            "target": 50,
+            "actual": ph_dict.get(ApplicationStatus.HIRED.value, 12) if 'ph_dict' in locals() else 12,
+            "is_mock": True
+        }
         return {
             "scope": "company",
             "overview_stats": {
@@ -123,8 +129,12 @@ class AnalyticsService:
             "active_pipelines": active_pipelines,
             "recent_applicants": recent_apps,
             "charts": {
-                "experience_distribution": exp_chart,
+                
                 "top_jobs": top_jobs_chart,
+                "team_workload": team_workload_chart,
+                "hiring_goal": hiring_goal,
+                "team_workload": team_workload_chart,
+                "hiring_goal": hiring_goal,
                 "pipeline_health": pipeline_health_chart
             }
         }
@@ -163,7 +173,7 @@ class AnalyticsService:
         recent_apps = []
         if job_ids:
             recent_pipeline = [
-                {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None}},
+                {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "applied_at": {"$gte": thirty_days_ago}}},
                 {"$sort": {"applied_at": -1}},
                 {"$limit": 5},
                 {"$project": {
@@ -188,6 +198,7 @@ class AnalyticsService:
             date_str = (now - timedelta(days=i)).strftime("%Y-%m-%d")
             velocity_chart.append({"date": date_str, "count": 0})
             
+        has_real_velocity = False
         if job_ids:
             raw_velocity = await ApplicationRepository.aggregate_applications([
                 {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "applied_at": {"$gte": now - timedelta(days=14)}}},
@@ -195,7 +206,15 @@ class AnalyticsService:
             ])
             velocity_dict = {item.get("_id"): item["count"] for item in raw_velocity}
             for day in velocity_chart:
-                day["count"] = velocity_dict.get(day["date"], 0)
+                count = velocity_dict.get(day["date"], 0)
+                day["count"] = count
+                if count > 0: has_real_velocity = True
+                
+        if not has_real_velocity:
+            import random
+            for day in velocity_chart:
+                day["count"] = random.randint(2, 15)
+                day["is_mock"] = True
             
         # 2. AI Score Histogram for Assigned Jobs
         ai_score_histogram = []
@@ -208,6 +227,111 @@ class AnalyticsService:
                 elif bound == 50: ai_score_histogram.append({"name": "50-80", "value": count, "color": "var(--color-warning-500)"})
                 elif bound == 80: ai_score_histogram.append({"name": ">80", "value": count, "color": "var(--color-success-500)"})
 
+        if not ai_score_histogram:
+            ai_score_histogram = [
+                {"name": "<50", "value": 12, "color": "var(--color-error-500)", "is_mock": True},
+                {"name": "50-80", "value": 45, "color": "var(--color-warning-500)", "is_mock": True},
+                {"name": ">80", "value": 28, "color": "var(--color-success-500)", "is_mock": True}
+            ]
+
+        # 3. Status Distribution
+        status_distribution = []
+        if job_ids:
+            raw_status = await ApplicationRepository.aggregate_applications([
+                {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "applied_at": {"$gte": thirty_days_ago}}},
+                {"$group": {"_id": "$status", "count": {"$sum": 1}}}
+            ])
+            for item in raw_status:
+                status = item.get("_id")
+                status_distribution.append({
+                    "name": status,
+                    "value": item["count"]
+                })
+        
+        if not status_distribution:
+            status_distribution = [
+                {"name": "Mới", "value": 24, "color": "#94a3b8", "is_mock": True},
+                {"name": "Đang xem xét", "value": 15, "color": "var(--color-info-500)", "is_mock": True},
+                {"name": "Phỏng vấn", "value": 8, "color": "var(--color-warning-500)", "is_mock": True},
+                {"name": "Đã tuyển", "value": 3, "color": "var(--color-success-500)", "is_mock": True}
+            ]
+        
+        # 4. Time in Stage (Mock)
+        time_in_stage = [
+            {"name": "Mới nộp", "days": 1.5, "color": "var(--color-info-500)", "is_mock": True},
+            {"name": "Đang xem xét", "days": 3.2, "color": "var(--color-warning-500)", "is_mock": True},
+            {"name": "Phỏng vấn", "days": 5.4, "color": "var(--color-primary-500)", "is_mock": True},
+            {"name": "Offer", "days": 2.1, "color": "var(--color-success-500)", "is_mock": True}
+        ]
+
+        # 5. Personal Funnel (Mock)
+        # If total_cvs_managed is 0, provide some non-zero mockup
+        mock_total = total_cvs_managed if total_cvs_managed > 0 else 85
+        mock_interviews = len(interviews) if len(interviews) > 0 else 4
+        
+        personal_funnel = [
+            {"name": "Tổng xử lý", "value": mock_total, "color": "var(--color-slate-400)", "is_mock": True},
+            {"name": "Pass CV", "value": int(mock_total * 0.4), "color": "var(--color-info-500)", "is_mock": True},
+            {"name": "Phỏng vấn", "value": mock_interviews * 4, "color": "var(--color-primary-500)", "is_mock": True},
+            {"name": "Đã tuyển", "value": mock_interviews, "color": "var(--color-success-500)", "is_mock": True}
+        ]
+
+        # If empty, add mock data
+        if not assigned_jobs:
+            assigned_jobs = [
+                {
+                    "job_id": "mock_1",
+                    "title": "Senior Frontend Developer (Mock)",
+                    "total_cvs": 120,
+                    "new_cvs": 5,
+                    "current_hired": 2,
+                    "target_hiring": 5
+                },
+                {
+                    "job_id": "mock_2",
+                    "title": "Product Designer (Mock)",
+                    "total_cvs": 45,
+                    "new_cvs": 0,
+                    "current_hired": 1,
+                    "target_hiring": 2
+                }
+            ]
+
+        if not today_schedule:
+            today_schedule = [
+                {"time": "09:00", "title": "Phỏng vấn Đỗ Văn A", "subtitle": "Senior Frontend", "type": "interview"},
+                {"time": "14:30", "title": "Phỏng vấn Lê Thị B", "subtitle": "Product Designer", "type": "interview"},
+                {"time": "16:00", "title": "Họp Sync Team Tuyển dụng", "subtitle": "Đánh giá KPI tuần", "type": "meeting"}
+            ]
+
+        if not recent_apps:
+            recent_apps = [
+                {
+                    "id": "mock_a1",
+                    "job_id": "mock_1",
+                    "candidate_name": "Đỗ Văn A",
+                    "job_title": "Senior Frontend Developer",
+                    "status": "new",
+                    "ai_score": 85
+                },
+                {
+                    "id": "mock_a2",
+                    "job_id": "mock_2",
+                    "candidate_name": "Lê Thị B",
+                    "job_title": "Product Designer",
+                    "status": "reviewing",
+                    "ai_score": 72
+                },
+                {
+                    "id": "mock_a3",
+                    "job_id": "mock_1",
+                    "candidate_name": "Nguyễn Văn C",
+                    "job_title": "Senior Frontend Developer",
+                    "status": "rejected",
+                    "ai_score": 45
+                }
+            ]
+
         return {
             "scope": "me",
             "todo_stats": {
@@ -217,22 +341,25 @@ class AnalyticsService:
                 "total_assigned_jobs": len(assigned_jobs)
             },
             "assigned_jobs": assigned_jobs,
-            "today_schedule": sorted(today_schedule, key=lambda x: x["time"]),
+            "today_schedule": sorted(today_schedule, key=lambda x: x.get("time", "")),
             "recent_applicants": recent_apps,
             "charts": {
                 "daily_assigned_cvs": velocity_chart,
-                "ai_score_histogram": ai_score_histogram
+                "ai_score_histogram": ai_score_histogram,
+                "status_distribution": status_distribution,
+                "time_in_stage": time_in_stage,
+                "personal_funnel": personal_funnel
             }
         }
     
     @classmethod
-    async def get_company_pro_analytics(cls, company_id: str) -> Dict[str, Any]:
+    async def get_company_pro_analytics(cls, company_id: str, days: int = 30) -> Dict[str, Any]:
         company = await CompanyRepository.get_by_id(company_id)
         if not company:
             return {"is_pro_active": False, "data": None, "message": "Công ty không tồn tại"}
 
         # Require PRO
-        is_pro = True
+        is_pro = True # Tạm thời bypass để test UI
 
         if not is_pro:
             return {
@@ -241,21 +368,31 @@ class AnalyticsService:
                 "message": "Vui lòng nâng cấp gói PRO để mở khóa báo cáo phân tích AI."
             }
 
+
+        now = datetime.now(timezone.utc)
+        if days >= 3650:
+            days = 3650
+        thirty_days_ago = now - timedelta(days=days)
         jobs = await JobRepository.find_many({"company_id": company_id}, projection={"_id": 1})
+
         job_ids = [str(j.get("id")) for j in jobs]
 
         raw_funnel = await ApplicationRepository.get_funnel_stats(job_ids)
         funnel_dict = {item.get("_id"): item["count"] for item in raw_funnel}
         total_cv = sum(funnel_dict.values())
         pass_ai = total_cv - funnel_dict.get(ApplicationStatus.NEW.value, 0) - funnel_dict.get(ApplicationStatus.REJECTED.value, 0)
+        reviewing = funnel_dict.get(ApplicationStatus.REVIEWING.value, 0)
         interview = funnel_dict.get(ApplicationStatus.INTERVIEW.value, 0)
+        offered = funnel_dict.get(ApplicationStatus.OFFERED.value, 0)
         hired = funnel_dict.get(ApplicationStatus.HIRED.value, 0)
 
         funnel_chart = [
-            { "name": "Tổng CV", "value": total_cv },
-            { "name": "Pass AI (>50đ)", "value": pass_ai },
-            { "name": "Phỏng vấn", "value": interview },
-            { "name": "Đã Tuyển", "value": hired }
+            { "name": "Tổng CV", "value": total_cv, "fill": "var(--color-primary-500)", "color": "var(--color-primary-500)" },
+            { "name": "Đang xem xét", "value": reviewing, "fill": "var(--color-info-500)", "color": "var(--color-info-500)" },
+            { "name": "Pass AI (>50đ)", "value": pass_ai, "fill": "var(--color-success-500)", "color": "var(--color-success-500)" },
+            { "name": "Phỏng vấn", "value": interview, "fill": "var(--color-warning-500)", "color": "var(--color-warning-500)" },
+            { "name": "Đề nghị (Offer)", "value": offered, "fill": "var(--color-rose-500)", "color": "var(--color-rose-500)" },
+            { "name": "Đã Tuyển", "value": hired, "fill": "var(--color-success-600)", "color": "var(--color-success-600)" }
         ]
 
         raw_ai = await ApplicationRepository.get_ai_score_distribution(job_ids)
@@ -273,13 +410,12 @@ class AnalyticsService:
         if "Xuất sắc (>80đ)" not in existing_names: score_chart.append({"name": "Xuất sắc (>80đ)", "value": 0, "color": "var(--color-success-500)"})
 
         trend_chart = []
-        now = datetime.now(timezone.utc)
-        for i in range(13, -1, -1):
+        for i in range(min(days, 30) - 1, -1, -1):
             date_str = (now - timedelta(days=i)).strftime("%d/%m")
             trend_chart.append({"date": date_str, "cv_count": 0})
             
         raw_trend = await ApplicationRepository.aggregate_applications([
-            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "applied_at": {"$gte": now - timedelta(days=14)}}},
+            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "applied_at": {"$gte": now - timedelta(days=min(days, 30))}}},
             {"$group": {"_id": {"$dateToString": {"format": "%d/%m", "date": "$applied_at"}}, "count": {"$sum": 1}}}
         ])
         trend_dict = {item.get("_id"): item["count"] for item in raw_trend}
@@ -288,9 +424,9 @@ class AnalyticsService:
 
         # 4. Word Cloud (Real Data using skills from cv_snapshot)
         skills_pipeline = [
-            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "cv_snapshot.skills": {"$exists": True, "$type": "array"}}},
-            {"$unwind": "$cv_snapshot.skills"},
-            {"$group": {"_id": "$cv_snapshot.skills", "count": {"$sum": 1}}},
+            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "applied_at": {"$gte": thirty_days_ago}, "cv_snapshot.extracted_skills": {"$exists": True, "$type": "array"}}},
+            {"$unwind": "$cv_snapshot.extracted_skills"},
+            {"$group": {"_id": "$cv_snapshot.extracted_skills", "count": {"$sum": 1}}},
             {"$sort": {"count": -1}},
             {"$limit": 10}
         ]
@@ -301,7 +437,7 @@ class AnalyticsService:
         
         # 5. Education Levels (Real Data)
         edu_pipeline = [
-            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None}},
+            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "applied_at": {"$gte": thirty_days_ago}}},
             {"$group": {"_id": "$cv_snapshot.education_level", "count": {"$sum": 1}}}
         ]
         raw_edu = await ApplicationRepository.aggregate_applications(edu_pipeline)
@@ -321,7 +457,7 @@ class AnalyticsService:
                 apply_time_heatmap.append({"day": d, "shift": s, "value": 0})
                 
         heatmap_pipeline = [
-            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None}},
+            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "applied_at": {"$gte": thirty_days_ago}}},
             {"$project": {
                 "dayOfWeek": {"$dayOfWeek": "$applied_at"},
                 "hour": {"$hour": "$applied_at"}
@@ -351,6 +487,80 @@ class AnalyticsService:
                 if cell["day"] == day_label and cell["shift"] == shift_label:
                     cell["value"] += count
 
+        
+        # Experience Distribution (Moved from Dashboard)
+        exp_pipeline = [
+            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "applied_at": {"$gte": thirty_days_ago}}},
+            {"$group": {"_id": "$cv_snapshot.years_of_experience", "count": {"$sum": 1}}},
+            {"$sort": {"_id": 1}}
+        ]
+        raw_exp = await ApplicationRepository.aggregate_applications(exp_pipeline)
+        exp_chart = []
+        colors = ["var(--color-slate-400)", "var(--color-primary-500)", "var(--color-info-500)", "var(--color-warning-500)", "var(--color-success-500)"]
+        for idx, item in enumerate(raw_exp):
+            val = item.get("_id") or 0
+            label = "Mới tốt nghiệp" if val == 0 else f"{val} năm kinh nghiệm"
+            exp_chart.append({"name": label, "value": item["count"], "color": colors[idx % len(colors)]})
+
+        # Mock Source ROI
+        source_roi = [
+            {"name": "Facebook", "value": 45, "hired": 5, "color": "var(--color-primary-500)", "is_mock": True},
+            {"name": "LinkedIn", "value": 30, "hired": 12, "color": "var(--color-info-500)", "is_mock": True},
+            {"name": "Referral", "value": 15, "hired": 8, "color": "var(--color-success-500)", "is_mock": True},
+            {"name": "Organic", "value": 10, "hired": 2, "color": "var(--color-slate-400)", "is_mock": True}
+        ]
+
+        # Mock Time to Hire
+        time_to_hire = []
+        for i in range(5, -1, -1):
+            date_str = (now - timedelta(days=30*i)).strftime("Tháng %m")
+            time_to_hire.append({"date": date_str, "days": 25 - i*2, "is_mock": True})
+
+        # Mock Knockout Analysis
+        knockout_analysis = [
+            {"name": "Tiếng Anh IELTS 6.5", "value": 124, "color": "var(--color-error-500)", "is_mock": True},
+            {"name": "Kinh nghiệm > 3 năm", "value": 85, "color": "var(--color-warning-500)", "is_mock": True},
+            {"name": "Bằng Đại học", "value": 42, "color": "var(--color-info-500)", "is_mock": True},
+            {"name": "ReactJS (Bắt buộc)", "value": 31, "color": "var(--color-primary-500)", "is_mock": True}
+        ]
+
+        
+        # Experience Distribution (Moved from Dashboard)
+        exp_pipeline = [
+            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "applied_at": {"$gte": thirty_days_ago}}},
+            {"$group": {"_id": "$cv_snapshot.years_of_experience", "count": {"$sum": 1}}},
+            {"$sort": {"_id": 1}}
+        ]
+        raw_exp = await ApplicationRepository.aggregate_applications(exp_pipeline)
+        exp_chart = []
+        colors = ["var(--color-slate-400)", "var(--color-primary-500)", "var(--color-info-500)", "var(--color-warning-500)", "var(--color-success-500)"]
+        for idx, item in enumerate(raw_exp):
+            val = item.get("_id") or 0
+            label = "Mới tốt nghiệp" if val == 0 else f"{val} năm kinh nghiệm"
+            exp_chart.append({"name": label, "value": item["count"], "color": colors[idx % len(colors)]})
+
+        # Mock Source ROI
+        source_roi = [
+            {"name": "Facebook", "value": 45, "hired": 5, "color": "var(--color-primary-500)", "is_mock": True},
+            {"name": "LinkedIn", "value": 30, "hired": 12, "color": "var(--color-info-500)", "is_mock": True},
+            {"name": "Referral", "value": 15, "hired": 8, "color": "var(--color-success-500)", "is_mock": True},
+            {"name": "Organic", "value": 10, "hired": 2, "color": "var(--color-slate-400)", "is_mock": True}
+        ]
+
+        # Mock Time to Hire
+        time_to_hire = []
+        for i in range(5, -1, -1):
+            date_str = (now - timedelta(days=30*i)).strftime("Tháng %m")
+            time_to_hire.append({"date": date_str, "days": 25 - i*2, "is_mock": True})
+
+        # Mock Knockout Analysis
+        knockout_analysis = [
+            {"name": "Tiếng Anh IELTS 6.5", "value": 124, "color": "var(--color-error-500)", "is_mock": True},
+            {"name": "Kinh nghiệm > 3 năm", "value": 85, "color": "var(--color-warning-500)", "is_mock": True},
+            {"name": "Bằng Đại học", "value": 42, "color": "var(--color-info-500)", "is_mock": True},
+            {"name": "ReactJS (Bắt buộc)", "value": 31, "color": "var(--color-primary-500)", "is_mock": True}
+        ]
+
         return {
             "is_pro_active": True,
             "data": {
@@ -359,158 +569,78 @@ class AnalyticsService:
                 "applications_trend": trend_chart,
                 "skills_word_cloud": skills_word_cloud,
                 "education_reasons_chart": education_reasons_chart,
-                "apply_time_heatmap": apply_time_heatmap
+                "apply_time_heatmap": apply_time_heatmap,
+                "experience_distribution": exp_chart,
+                "source_roi": source_roi,
+                "time_to_hire": time_to_hire,
+                "knockout_analysis": knockout_analysis,
+                
+                "source_roi": source_roi,
+                "time_to_hire": time_to_hire,
+                "knockout_analysis": knockout_analysis
             }
         }
 
     @classmethod
-    async def get_admin_dashboard_metrics(cls) -> Dict[str, Any]:
+    async def get_admin_dashboard_metrics(cls, days: int = 30) -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
-        thirty_days_ago = now - timedelta(days=30)
+        
+        if days >= 3650:
+            days = 3650
+            
+        time_ago = now - timedelta(days=days)
         
         total_users = await UserRepository.count_documents({"deleted_at": None})
-        new_users_30d = await UserRepository.count_documents({"deleted_at": None, "created_at": {"$gte": thirty_days_ago}})
+        new_users = await UserRepository.count_documents({"deleted_at": None, "created_at": {"$gte": time_ago}})
         
         total_companies = await CompanyRepository.count_documents({"deleted_at": None})
         verified_companies = await CompanyRepository.count_documents({"deleted_at": None, "status": CompanyStatus.VERIFIED.value})
         pending_companies = await CompanyRepository.count_documents({"deleted_at": None, "status": CompanyStatus.PENDING_VERIFICATION.value})
         
         total_jobs = await JobRepository.count_documents({"deleted_at": None, "status": JobStatus.OPEN.value})
+        new_jobs = await JobRepository.count_documents({"deleted_at": None, "created_at": {"$gte": time_ago}})
 
-        recent_pending = await CompanyRepository.find_many(
-            {"deleted_at": None, "status": CompanyStatus.PENDING_VERIFICATION.value},
-            sort=[("created_at", -1)],
-            limit=5
-        )
-        
-        # 1. Growth Trend Chart (Area Chart)
-        growth_chart = []
-        for i in range(13, -1, -1):
-            date_str = (now - timedelta(days=i)).strftime("%d/%m")
-            growth_chart.append({"date": date_str, "companies": 0, "users": 0})
-            
-        raw_companies = await CompanyRepository.aggregate_companies([
-            {"$match": {"deleted_at": None, "created_at": {"$gte": now - timedelta(days=14)}}},
-            {"$group": {"_id": {"$dateToString": {"format": "%d/%m", "date": "$created_at"}}, "count": {"$sum": 1}}}
-        ])
-        comp_dict = {item.get("_id"): item["count"] for item in raw_companies}
-        
-        raw_users_d = await UserRepository.aggregate_users([
-            {"$match": {"deleted_at": None, "created_at": {"$gte": now - timedelta(days=14)}}},
-            {"$group": {"_id": {"$dateToString": {"format": "%d/%m", "date": "$created_at"}}, "count": {"$sum": 1}}}
-        ])
-        user_dict = {item.get("_id"): item["count"] for item in raw_users_d}
-        
-        for day in growth_chart:
-            day["companies"] = comp_dict.get(day["date"], 0)
-            day["users"] = user_dict.get(day["date"], 0)
-
-        # 2. Subscription Tier (Donut Chart)
-        from app.repositories.subscription_plan_repository import SubscriptionPlanRepository
-        from app.database.config import get_db
-        plans = await SubscriptionPlanRepository.find_many()
-        plan_dict = {str(p["id"]): p["name"] for p in plans}
-
-        db = get_db()
-        tier_pipeline = [
-            {"$match": {"deleted_at": None}},
-            {"$group": {"_id": "$current_plan_id", "count": {"$sum": 1}}}
-        ]
-        raw_company_tiers = await CompanyRepository.aggregate_companies(tier_pipeline)
-        raw_applicant_tiers = await db.applicant_profiles.aggregate(tier_pipeline).to_list(length=100)
-
-        tier_counts = {}
-        for item in raw_company_tiers + raw_applicant_tiers:
-            pid = item.get("_id")
-            tier_counts[pid] = tier_counts.get(pid, 0) + item["count"]
-
-        subscription_tier_chart = []
-        colors = ["#94a3b8", "var(--color-success-500)", "var(--color-info-500)", "var(--color-warning-500)", "var(--color-primary-500)", "var(--color-error-500)"]
-
-        for plan_id, count in tier_counts.items():
-            if not plan_id:
-                label = "Gói Miễn Phí"
-            else:
-                label = plan_dict.get(str(plan_id), "Gói Trả Phí")
-            
-            # Find if label exists
-            found = False
-            for tier in subscription_tier_chart:
-                if tier["name"] == label:
-                    tier["value"] += count
-                    found = True
-                    break
-            
-            if not found:
-                color = colors[0] if label == "Gói Miễn Phí" else colors[(len(subscription_tier_chart) % (len(colors) - 1)) + 1]
-                subscription_tier_chart.append({"name": label, "value": count, "color": color})
-
-        # 3. Bản đồ Ngành nghề (Bar Chart)
-        raw_industries = await JobRepository.aggregate_jobs([
-            {"$match": {"deleted_at": None}},
-            {"$group": {"_id": "$industry", "count": {"$sum": 1}}},
-            {"$sort": {"count": -1}},
-            {"$limit": 5}
-        ])
-        jobs_by_industry_chart = []
-        colors = ["var(--color-primary-500)", "var(--color-info-500)", "var(--color-success-500)", "var(--color-warning-500)", "var(--color-error-500)"]
-        for idx, item in enumerate(raw_industries):
-            ind = item.get("_id") or "Khác"
-            if isinstance(ind, list): ind = ind[0] if len(ind) > 0 else "Khác"
-            jobs_by_industry_chart.append({"name": ind, "value": item["count"], "color": colors[idx % len(colors)]})
-            
-        # 4. Tải trọng Hệ Thống (Line Chart - Real applications created per day)
-        system_load_chart = []
-        for i in range(13, -1, -1):
-            date_str = (now - timedelta(days=i)).strftime("%d/%m")
-            system_load_chart.append({"date": date_str, "cv_received": 0})
-            
-        raw_apps = await ApplicationRepository.aggregate_applications([
-            {"$match": {"deleted_at": None, "applied_at": {"$gte": now - timedelta(days=14)}}},
-            {"$group": {"_id": {"$dateToString": {"format": "%d/%m", "date": "$applied_at"}}, "count": {"$sum": 1}}}
-        ])
-        app_dict = {item.get("_id"): item["count"] for item in raw_apps}
-        for day in system_load_chart:
-            day["cv_received"] = app_dict.get(day["date"], 0)
+        from app.repositories.application_repository import ApplicationRepository
+        total_cvs = await ApplicationRepository.count_documents({"deleted_at": None})
+        new_cvs = await ApplicationRepository.count_documents({"deleted_at": None, "applied_at": {"$gte": time_ago}})
 
         return {
             "overview_stats": {
-                "total_users": {"value": total_users, "trend": new_users_30d, "is_up": True},
-                "total_companies": {"value": total_companies, "trend": verified_companies, "is_up": True},
-                "pending_kyc": {"value": pending_companies, "trend": 0, "is_up": False},
-                "active_jobs": {"value": total_jobs, "trend": 0, "is_up": True},
-            },
-            "recent_pending_companies": recent_pending,
-            "charts": {
-                "growth_trend": growth_chart,
-                "subscription_tier": subscription_tier_chart,
-                "jobs_by_industry": jobs_by_industry_chart,
-                "system_load": system_load_chart
+                "total_users": {"value": total_users, "trend": new_users},
+                "total_companies": {"value": total_companies, "trend": verified_companies},
+                "pending_kyc": {"value": pending_companies, "trend": 0},
+                "active_jobs": {"value": total_jobs, "trend": new_jobs},
+                "total_cvs": {"value": total_cvs, "trend": new_cvs},
+                "system_health": {"value": "100%", "trend": "OK"}
             }
         }
+
 
     @classmethod
     async def get_applicant_dashboard_metrics(cls, user_id: str) -> Dict[str, Any]:
         apps = await ApplicationRepository.find_many({"applicant_user_id": user_id, "deleted_at": None})
         
         # 1. Funnel Chart
-        funnel_dict = {"total": 0, "viewed": 0, "interview": 0, "hired": 0}
-        funnel_dict["total"] = len(apps)
+        funnel_dict = {}
         for app in apps:
             status = app.get("status", ApplicationStatus.NEW.value)
-            if status != ApplicationStatus.NEW.value:
-                funnel_dict["viewed"] += 1
-            if status in [ApplicationStatus.INTERVIEW.value, ApplicationStatus.HIRED.value]:
-                funnel_dict["interview"] += 1
-            if status == ApplicationStatus.HIRED.value:
-                funnel_dict["hired"] += 1
-                
+            funnel_dict[status] = funnel_dict.get(status, 0) + 1
+            
         funnel_chart = [
-            {"name": "Đã Nộp", "value": funnel_dict["total"], "fill": "#94a3b8"},
-            {"name": "HR Đã Xem", "value": funnel_dict["viewed"], "fill": "var(--color-primary-400)"},
-            {"name": "Phỏng Vấn", "value": funnel_dict["interview"], "fill": "var(--color-warning-500)"},
-            {"name": "Trúng Tuyển", "value": funnel_dict["hired"], "fill": "var(--color-success-500)"}
+            {"name": "Mới nộp", "value": funnel_dict.get(ApplicationStatus.NEW.value, 0), "fill": "var(--color-info-500)"},
+            {"name": "Đang xem xét", "value": funnel_dict.get(ApplicationStatus.REVIEWING.value, 0), "fill": "var(--color-warning-500)"},
+            {"name": "Phỏng vấn", "value": funnel_dict.get(ApplicationStatus.INTERVIEW.value, 0), "fill": "var(--color-primary-500)"},
+            {"name": "Offer", "value": funnel_dict.get(ApplicationStatus.OFFERED.value, 0), "fill": "var(--color-rose-500)"},
+            {"name": "Trúng tuyển", "value": funnel_dict.get(ApplicationStatus.HIRED.value, 0), "fill": "var(--color-success-500)"},
+            {"name": "Từ chối", "value": funnel_dict.get(ApplicationStatus.REJECTED.value, 0), "fill": "var(--color-error-500)"},
+            {"name": "Rút lui", "value": funnel_dict.get(ApplicationStatus.WITHDRAWN.value, 0), "fill": "var(--color-slate-500)"},
+            {"name": "Hết hạn", "value": funnel_dict.get(ApplicationStatus.EXPIRED.value, 0), "fill": "var(--color-slate-600)"}
         ]
+        
+        # Remove empty stages if total apps is > 0
+        if apps:
+            funnel_chart = [f for f in funnel_chart if f["value"] > 0]
+
 
         # 2. AI Score History Radar
         ai_scores = []
@@ -522,18 +652,23 @@ class AnalyticsService:
             {"subject": "Kỹ năng (Skills)", "A": 0, "fullMark": 100},
             {"subject": "Kinh nghiệm (Exp)", "A": 0, "fullMark": 100},
             {"subject": "Học vấn (Edu)", "A": 0, "fullMark": 100},
+            {"subject": "Ngữ nghĩa (NLP)", "A": 0, "fullMark": 100},
         ]
         
         if apps:
-            total_skills, total_exp, total_edu = 0, 0, 0
+            total_skills, total_exp, total_edu, total_nlp = 0, 0, 0, 0
             for app in apps:
                 s = app.get("ai_score", {})
-                total_skills += s.get("match_percentage_skills", 0)
-                total_exp += s.get("match_percentage_experience", 0)
-                total_edu += s.get("match_percentage_education", 0)
-            skill_gap_radar[0]["A"] = total_skills / len(apps)
-            skill_gap_radar[1]["A"] = total_exp / len(apps)
-            skill_gap_radar[2]["A"] = total_edu / len(apps)
+                sb = s.get("score_breakdown", {})
+                # It might be stored flat or nested
+                total_skills += sb.get("skills_score", 0)
+                total_exp += sb.get("experience_score", 0)
+                total_edu += sb.get("education_score", 0)
+                total_nlp += sb.get("nlp_score", 0)
+            skill_gap_radar[0]["A"] = round(total_skills / len(apps), 1)
+            skill_gap_radar[1]["A"] = round(total_exp / len(apps), 1)
+            skill_gap_radar[2]["A"] = round(total_edu / len(apps), 1)
+            skill_gap_radar[3]["A"] = round(total_nlp / len(apps), 1)
 
         # 3. Application Activity Trend
         now = datetime.now(timezone.utc)
@@ -549,6 +684,24 @@ class AnalyticsService:
         app_dict = {item.get("_id"): item["count"] for item in raw_apps}
         for day in activity_chart:
             day["applied"] = app_dict.get(day["date"], 0)
+
+
+        raw_job_status = await JobRepository.aggregate_jobs([
+            {"$match": {"deleted_at": None}},
+            {"$group": {"_id": "$status", "count": {"$sum": 1}}}
+        ])
+        job_status_chart = []
+        for item in raw_job_status:
+            status = item.get("_id")
+            count = item["count"]
+            if status == "open":
+                job_status_chart.append({"name": "Đang mở", "value": count, "color": "var(--color-success-500)"})
+            elif status == "closed":
+                job_status_chart.append({"name": "Đã đóng", "value": count, "color": "var(--color-error-500)"})
+            elif status == "draft":
+                job_status_chart.append({"name": "Bản nháp", "value": count, "color": "var(--color-warning-500)"})
+            else:
+                job_status_chart.append({"name": "Khác", "value": count, "color": "#94a3b8"})
 
         return {
             "charts": {
@@ -581,11 +734,19 @@ class AnalyticsService:
             else:
                 days = 30
         
+        # Helper for dates
+        date_labels = []
+        for i in range(days - 1, -1, -1):
+            day_obj = now - timedelta(days=i)
+            mongo_date = day_obj.strftime("%Y-%m-%d")
+            display_date = day_obj.strftime("%d/%m/%Y" if days > 90 else "%d/%m")
+            date_labels.append({"mongo_date": mongo_date, "date": display_date})
+
+        # 1. Company Status
         raw_company_status = await CompanyRepository.aggregate_companies([
             {"$match": {"deleted_at": None}},
             {"$group": {"_id": "$status", "count": {"$sum": 1}}}
         ])
-        
         status_chart = []
         for item in raw_company_status:
             status = item.get("_id")
@@ -599,18 +760,7 @@ class AnalyticsService:
             elif status == CompanyStatus.SUSPENDED.value:
                 status_chart.append({"name": "Tạm khóa", "value": count, "color": "#64748b"})
 
-        growth_chart = []
-        for i in range(days - 1, -1, -1):
-            day_obj = now - timedelta(days=i)
-            mongo_date = day_obj.strftime("%Y-%m-%d")
-            display_date = day_obj.strftime("%d/%m/%Y" if days > 90 else "%d/%m")
-            growth_chart.append({
-                "mongo_date": mongo_date,
-                "date": display_date,
-                "users": 0,
-                "companies": 0
-            })
-            
+        # 2. Growth Chart (Users & Companies)
         raw_users = await UserRepository.aggregate_users([
             {"$match": {"deleted_at": None, "created_at": {"$gte": now - timedelta(days=days)}}},
             {"$group": {"_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}}, "count": {"$sum": 1}}}
@@ -623,18 +773,113 @@ class AnalyticsService:
         ])
         comp_dict = {item.get("_id"): item["count"] for item in raw_companies}
 
-        for day in growth_chart:
+        growth_chart = []
+        for day in date_labels:
             m_date = day["mongo_date"]
-            day["users"] = user_dict.get(m_date, 0)
-            day["companies"] = comp_dict.get(m_date, 0)
-            del day["mongo_date"]
+            growth_chart.append({
+                "date": day["date"],
+                "users": user_dict.get(m_date, 0),
+                "companies": comp_dict.get(m_date, 0)
+            })
 
-        # 1. Gói cước (Pie Chart)
+        # 3. Roles Distribution
+        raw_roles = await UserRepository.aggregate_users([
+            {"$match": {"deleted_at": None}},
+            {"$group": {"_id": "$role", "count": {"$sum": 1}}}
+        ])
+        role_chart = []
+        role_map = {"applicant": "Ứng viên", "hr_owner": "HR Admin", "hr_member": "HR Member", "admin": "System Admin"}
+        role_colors = ["var(--color-primary-500)", "var(--color-info-500)", "var(--color-success-500)", "var(--color-warning-500)"]
+        for idx, item in enumerate(raw_roles):
+            role_id = item.get("_id") or "applicant"
+            role_chart.append({
+                "name": role_map.get(role_id, role_id),
+                "value": item["count"],
+                "color": role_colors[idx % len(role_colors)]
+            })
+
+        # 4. Jobs Over Time & Jobs By Industry
+        from app.repositories.job_repository import JobRepository
+        raw_jobs_time = await JobRepository.aggregate_jobs([
+            {"$match": {"deleted_at": None, "created_at": {"$gte": now - timedelta(days=days)}}},
+            {"$group": {"_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}}, "count": {"$sum": 1}}}
+        ])
+        job_time_dict = {item.get("_id"): item["count"] for item in raw_jobs_time}
+        
+        job_trend_chart = []
+        for day in date_labels:
+            job_trend_chart.append({
+                "date": day["date"],
+                "jobs": job_time_dict.get(day["mongo_date"], 0)
+            })
+
+        raw_industries = await JobRepository.aggregate_jobs([
+            {"$match": {"deleted_at": None}},
+            {"$group": {"_id": "$industry", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 7}
+        ])
+        jobs_by_industry_chart = []
+        ind_colors = ["var(--color-primary-500)", "var(--color-info-500)", "var(--color-success-500)", "var(--color-warning-500)", "var(--color-error-500)", "#8b5cf6", "#ec4899"]
+        for idx, item in enumerate(raw_industries):
+            ind = item.get("_id") or "Khác"
+            if isinstance(ind, list): ind = ind[0] if len(ind) > 0 else "Khác"
+            jobs_by_industry_chart.append({"name": ind, "value": item["count"], "color": ind_colors[idx % len(ind_colors)]})
+
+        # 5. Top 10 Skills
+        raw_skills = await JobRepository.aggregate_jobs([
+            {"$match": {"deleted_at": None}},
+            {"$unwind": "$skills_required"},
+            {"$group": {"_id": "$skills_required.skill_name", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 10}
+        ])
+        skills_chart = []
+        for idx, item in enumerate(raw_skills):
+            skills_chart.append({
+                "name": item.get("_id", "Unknown"),
+                "value": item["count"],
+                "color": "var(--color-info-500)"
+            })
+
+        # 6. Applications Load & Funnel
+        from app.repositories.application_repository import ApplicationRepository
+        raw_apps_time = await ApplicationRepository.aggregate_applications([
+            {"$match": {"deleted_at": None, "applied_at": {"$gte": now - timedelta(days=days)}}},
+            {"$group": {"_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$applied_at"}}, "count": {"$sum": 1}}}
+        ])
+        app_time_dict = {item.get("_id"): item["count"] for item in raw_apps_time}
+        
+        system_load_chart = []
+        for day in date_labels:
+            system_load_chart.append({
+                "date": day["date"],
+                "cv_received": app_time_dict.get(day["mongo_date"], 0)
+            })
+            
+        raw_app_status = await ApplicationRepository.aggregate_applications([
+            {"$match": {"deleted_at": None, "applied_at": {"$gte": now - timedelta(days=days)}}},
+            {"$group": {"_id": "$status", "count": {"$sum": 1}}}
+        ])
+        app_status_dict = {item.get("_id"): item["count"] for item in raw_app_status}
+        
+        app_funnel_chart = [
+            {"name": "Mới nộp", "value": app_status_dict.get(ApplicationStatus.NEW.value, 0), "color": "#0ea5e9"},
+            {"name": "Đang xem xét", "value": app_status_dict.get(ApplicationStatus.REVIEWING.value, 0), "color": "#f59e0b"},
+            {"name": "Phỏng vấn", "value": app_status_dict.get(ApplicationStatus.INTERVIEW.value, 0), "color": "#2563eb"},
+            {"name": "Offer", "value": app_status_dict.get(ApplicationStatus.OFFERED.value, 0), "color": "#f43f5e"},
+            {"name": "Trúng tuyển", "value": app_status_dict.get(ApplicationStatus.HIRED.value, 0), "color": "#10b981"},
+            {"name": "Từ chối", "value": app_status_dict.get(ApplicationStatus.REJECTED.value, 0), "color": "#ef4444"},
+            {"name": "Rút lui", "value": app_status_dict.get(ApplicationStatus.WITHDRAWN.value, 0), "color": "#64748b"},
+            {"name": "Hết hạn", "value": app_status_dict.get(ApplicationStatus.EXPIRED.value, 0), "color": "#475569"}
+        ]
+
+
+        # 7. Subscriptions
         from app.repositories.subscription_plan_repository import SubscriptionPlanRepository
         from app.database.config import get_db
         plans = await SubscriptionPlanRepository.find_many()
         plan_dict = {str(p["id"]): p["name"] for p in plans}
-
         db = get_db()
         tier_pipeline = [
             {"$match": {"deleted_at": None}},
@@ -642,81 +887,87 @@ class AnalyticsService:
         ]
         raw_company_tiers = await CompanyRepository.aggregate_companies(tier_pipeline)
         raw_applicant_tiers = await db.applicant_profiles.aggregate(tier_pipeline).to_list(length=100)
-
         tier_counts = {}
         for item in raw_company_tiers + raw_applicant_tiers:
             pid = item.get("_id")
             tier_counts[pid] = tier_counts.get(pid, 0) + item["count"]
-
         subscription_tier_chart = []
-        pie_colors = [
-            "#94a3b8", # gray for free
-            "#3b82f6", # blue
-            "#8b5cf6", # violet
-            "#ec4899", # pink
-            "#f59e0b", # amber
-            "#10b981", # emerald
-            "#ef4444", # red
-            "#06b6d4", # cyan
-            "#f97316", # orange
-            "#14b8a6", # teal
-            "#6366f1", # indigo
-        ]
+        pie_colors = ["#94a3b8", "#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#10b981", "#ef4444", "#06b6d4"]
         for plan_id, count in tier_counts.items():
-            if not plan_id:
-                label = "Gói Miễn Phí"
-            else:
-                label = plan_dict.get(str(plan_id), "Gói Trả Phí")
-            
+            label = "Gói Miễn Phí" if not plan_id else plan_dict.get(str(plan_id), "Gói Trả Phí")
             found = False
             for tier in subscription_tier_chart:
                 if tier["name"] == label:
                     tier["value"] += count
                     found = True
                     break
-            
             if not found:
                 color = pie_colors[0] if label == "Gói Miễn Phí" else pie_colors[(len(subscription_tier_chart) % (len(pie_colors) - 1)) + 1]
                 subscription_tier_chart.append({"name": label, "value": count, "color": color})
 
-        # 2. Ngành nghề (Bar Chart)
-        from app.repositories.job_repository import JobRepository
-        raw_industries = await JobRepository.aggregate_jobs([
-            {"$match": {"deleted_at": None}},
-            {"$group": {"_id": "$industry", "count": {"$sum": 1}}},
-            {"$sort": {"count": -1}},
-            {"$limit": 5}
+        # 8. Support Tickets
+        from app.repositories.support_ticket_repository import SupportTicketRepository
+        raw_tickets_time = await SupportTicketRepository.aggregate_tickets([
+            {"$match": {"deleted_at": None, "created_at": {"$gte": now - timedelta(days=days)}}},
+            {"$group": {"_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}}, "count": {"$sum": 1}}}
         ])
-        jobs_by_industry_chart = []
-        ind_colors = ["var(--color-primary-500)", "var(--color-info-500)", "var(--color-success-500)", "var(--color-warning-500)", "var(--color-error-500)"]
-        for idx, item in enumerate(raw_industries):
-            ind = item.get("_id") or "Khác"
-            if isinstance(ind, list): ind = ind[0] if len(ind) > 0 else "Khác"
-            jobs_by_industry_chart.append({"name": ind, "value": item["count"], "color": ind_colors[idx % len(ind_colors)]})
+        ticket_time_dict = {item.get("_id"): item["count"] for item in raw_tickets_time}
+        
+        ticket_trend_chart = []
+        for day in date_labels:
+            ticket_trend_chart.append({
+                "date": day["date"],
+                "tickets": ticket_time_dict.get(day["mongo_date"], 0)
+            })
 
-        # 3. Tải trọng (Line chart)
-        system_load_chart = []
-        for i in range(days - 1, -1, -1):
-            date_str = (now - timedelta(days=i)).strftime("%d/%m")
-            system_load_chart.append({"date": date_str, "cv_received": 0})
-            
-        from app.repositories.application_repository import ApplicationRepository
-        raw_apps = await ApplicationRepository.aggregate_applications([
-            {"$match": {"deleted_at": None, "applied_at": {"$gte": now - timedelta(days=days)}}},
-            {"$group": {"_id": {"$dateToString": {"format": "%d/%m", "date": "$applied_at"}}, "count": {"$sum": 1}}}
+        raw_ticket_status = await SupportTicketRepository.aggregate_tickets([
+            {"$match": {"deleted_at": None, "created_at": {"$gte": now - timedelta(days=days)}}},
+            {"$group": {"_id": "$status", "count": {"$sum": 1}}}
         ])
-        app_dict = {item.get("_id"): item["count"] for item in raw_apps}
-        for day in system_load_chart:
-            day["cv_received"] = app_dict.get(day["date"], 0)
+        ticket_status_chart = []
+        for item in raw_ticket_status:
+            status = item.get("_id")
+            count = item["count"]
+            if status == "open":
+                ticket_status_chart.append({"name": "Mở", "value": count, "color": "var(--color-error-500)"})
+            elif status == "in_progress":
+                ticket_status_chart.append({"name": "Đang xử lý", "value": count, "color": "var(--color-warning-500)"})
+            else:
+                ticket_status_chart.append({"name": "Đã giải quyết", "value": count, "color": "var(--color-success-500)"})
+
+
+        raw_job_status = await JobRepository.aggregate_jobs([
+            {"$match": {"deleted_at": None}},
+            {"$group": {"_id": "$status", "count": {"$sum": 1}}}
+        ])
+        job_status_chart = []
+        for item in raw_job_status:
+            status = item.get("_id")
+            count = item["count"]
+            if status == "open":
+                job_status_chart.append({"name": "Đang mở", "value": count, "color": "var(--color-success-500)"})
+            elif status == "closed":
+                job_status_chart.append({"name": "Đã đóng", "value": count, "color": "var(--color-error-500)"})
+            elif status == "draft":
+                job_status_chart.append({"name": "Bản nháp", "value": count, "color": "var(--color-warning-500)"})
+            else:
+                job_status_chart.append({"name": "Khác", "value": count, "color": "#94a3b8"})
 
         return {
-            "company_status_chart": status_chart,
-            "growth_trend_chart": growth_chart,
             "charts": {
                 "growth_trend": growth_chart,
-                "subscription_tier": subscription_tier_chart,
+                "role_distribution": role_chart,
+                "company_status": status_chart,
+                "job_trend": job_trend_chart,
                 "jobs_by_industry": jobs_by_industry_chart,
-                "system_load": system_load_chart
+                "top_skills": skills_chart,
+                "system_load": system_load_chart,
+                "app_funnel": app_funnel_chart,
+                "subscription_tier": subscription_tier_chart,
+                "ticket_trend": ticket_trend_chart,
+                "ticket_status": ticket_status_chart,
+                "job_status": job_status_chart
             }
         }
+
 

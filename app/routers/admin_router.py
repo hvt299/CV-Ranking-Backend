@@ -384,3 +384,23 @@ async def admin_list_cvs(
 ):
     cvs = await CVRepository.find_many({}, sort=[("created_at", -1)], limit=limit, include_deleted=True)
     return cvs
+
+@router.delete("/cvs/{cv_id}")
+async def admin_delete_cv(cv_id: str, current_admin: CurrentUser = Depends(require_admin)):
+    await CVRepository.delete(cv_id, hard_delete=True)
+    return {"status": "success", "message": "Đã xóa CV thành công"}
+
+from app.repositories.cover_letter_repository import CoverLetterRepository
+
+@router.get("/cover-letters")
+async def admin_list_cover_letters(
+    limit: int = Query(100, le=1000),
+    current_admin: CurrentUser = Depends(require_admin)
+):
+    cls = await CoverLetterRepository.find_many({}, sort=[("created_at", -1)], limit=limit, include_deleted=True)
+    return cls
+
+@router.delete("/cover-letters/{cl_id}")
+async def admin_delete_cover_letter(cl_id: str, current_admin: CurrentUser = Depends(require_admin)):
+    await CoverLetterRepository.delete(cl_id, hard_delete=True)
+    return {"status": "success", "message": "Đã xóa Thư giới thiệu thành công"}

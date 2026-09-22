@@ -199,7 +199,6 @@ def extract_basic_info(text: str) -> Dict:
 
 def extract_social_links(text: str) -> dict:
     links = {
-        "github": None,
         "linkedin": None,
         "portfolio": []
     }
@@ -219,10 +218,7 @@ def extract_social_links(text: str) -> dict:
         if 'topcv.vn' in url or len(url) < 8:
             continue
 
-        if 'github.com' in url or 'gitlab.com' in url:
-            if not links['github']:
-                links['github'] = url
-        elif 'linkedin.com' in url:
+        if 'linkedin.com' in url:
             if not links['linkedin']:
                 links['linkedin'] = url
         else:
@@ -353,6 +349,14 @@ async def analyze_cv_text(text: str) -> Dict:
         current_job_title = llm_metrics.get("current_job_title")
         languages = llm_metrics.get("languages", [])
         certifications = llm_metrics.get("certifications", [])
+        
+        llm_skills = llm_metrics.get("skills", [])
+        for sk in llm_skills:
+            s_name = sk.get("name", "").lower()
+            s_years = sk.get("years", 0.0)
+            if s_name and s_years > 0:
+                norm_name = get_normalized_skill(s_name)
+                skill_experience[norm_name] = max(skill_experience.get(norm_name, 0.0), s_years)
 
     return {
         **info,
@@ -466,7 +470,8 @@ def calculate_skill_score(cv_skills: set, cv_skill_exp: dict, cv_yoe: float, jd_
     for req in jd_required:
         earned, raw_name, is_matched, conf, y_exp = evaluate_skill(req, 1.0)
         skill_details.append({
-            "skill": raw_name, "matched": is_matched, "confidence": conf, "years_experience": y_exp
+            "skill": raw_name, "matched": is_matched, "confidence": conf, "years_experience": y_exp,
+            "is_knockout": req.get("is_knockout", False)
         })
         if is_matched:
             score += earned
@@ -477,7 +482,8 @@ def calculate_skill_score(cv_skills: set, cv_skill_exp: dict, cv_yoe: float, jd_
     for pref in jd_preferred:
         earned, raw_name, is_matched, conf, y_exp = evaluate_skill(pref, 0.5)
         skill_details.append({
-            "skill": raw_name, "matched": is_matched, "confidence": conf, "years_experience": y_exp
+            "skill": raw_name, "matched": is_matched, "confidence": conf, "years_experience": y_exp,
+            "is_knockout": pref.get("is_knockout", False)
         })
         if is_matched:
             score += earned
@@ -677,10 +683,8 @@ def score_cv(cv_data: dict, jd_data: dict) -> dict:
             "education_score": round(education_score, 2),
             "nlp_score": round(nlp_score, 2),
             "penalty_score": round(penalty_score, 2),
-            "fraud_analysis": fraud_analysis
         },
         "skill_details": skill_details,
-        "missing_required_skills": missing_required_skills,
         "top_contributing_sentences": cv_data.get("top_sentences", []),
         "matched_skills": matched_skills_names 
     }
