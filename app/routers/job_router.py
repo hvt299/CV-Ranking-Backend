@@ -3,7 +3,7 @@ from typing import List
 from datetime import datetime, timezone
 from bson import ObjectId
 
-from app.core.security import CurrentUser, require_hr, require_hr_or_admin, get_scope_filter
+from app.core.security import ensure_job_manager, CurrentUser, require_hr, require_hr_or_admin, get_scope_filter
 from app.middleware.subscription import get_company_plan_features, require_tier
 from app.database.config import Collections
 from app.schemas.job_schema import JobCreateEnterprise, JobResponse
@@ -21,7 +21,7 @@ from app.middleware.rate_limit import limiter
 from fastapi import Request, Response
 import os
 import httpx
-from app.core.security import require_qstash_signature
+from app.core.security import ensure_job_manager, require_qstash_signature
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["Job Management & Ranking"])
@@ -30,7 +30,8 @@ QSTASH_TOKEN = os.getenv("QSTASH_TOKEN", "")
 QSTASH_URL = os.getenv("QSTASH_URL", "https://qstash-eu-central-1.upstash.io")
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
-async def rescore_all_applications_for_job(job_id: str, jd_data: dict):
+async def rescore_all_applications_for_job(job_id: str, jd_data: dict, current_user: CurrentUser = Depends(require_hr)):
+    await ensure_job_manager(job_id, current_user)
     applications = await ApplicationRepository.find_all({"job_id": job_id}, limit=None)
     jd_search_text = jd_data.get("jd_search_text", "")
     
@@ -82,6 +83,9 @@ async def create_job(job: JobCreateEnterprise, current_user: CurrentUser = Depen
         )
     
     job_dict = job.model_dump()
+
+    if current_user.role == UserRole.HR_MEMBER.value:
+        job_dict["assigned_hr_ids"] = [current_user.id]
 
     if current_user.role != UserRole.ADMIN:
         job_dict["company_id"] = current_user.company_id
@@ -177,6 +181,7 @@ async def update_job(
     current_user: CurrentUser = Depends(require_hr),
     scope_filter: dict = Depends(get_scope_filter)
 ):
+    await ensure_job_manager(job_id, current_user)
     update_data = job_update.model_dump()
     
     if current_user.role != UserRole.ADMIN:
@@ -275,7 +280,8 @@ async def update_job(
     }
 
 @router.delete("/{job_id}", dependencies=[Depends(require_hr)])
-async def delete_job(job_id: str, scope_filter: dict = Depends(get_scope_filter)):
+async def delete_job(job_id: str, current_user: CurrentUser = Depends(require_hr), scope_filter: dict = Depends(get_scope_filter)):
+    await ensure_job_manager(job_id, current_user)
     deleted_count = await JobRepository.delete(job_id, extra_query=scope_filter)
     if deleted_count == 0:
         raise HTTPException(status_code=404, detail="Không tìm thấy Job hoặc bạn không có quyền xóa")
@@ -439,6 +445,23 @@ async def get_public_job_detail(job_id: str):
     
     return job
 
+@router.post("/{job_id}/rescore", dependencies=[Depends(require_hr)])
+async def manual_rescore_job(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: CurrentUser = Depends(require_hr),
+    scope_filter: dict = Depends(get_scope_filter)
+):
+    await ensure_job_manager(job_id, current_user)
+    job = await JobRepository.get_by_id(job_id, extra_query=scope_filter)
+    if not job:
+        raise HTTPException(status_code=404, detail="Không tìm thấy Job")
+        
+    # Queue the rescore task
+    background_tasks.add_task(rescore_all_applications_for_job, job_id, job, current_user)
+    
+    return {"status": "success", "message": "Đã đưa tác vụ chấm lại toàn bộ CV vào hàng đợi. Vui lòng đợi trong giây lát."}
+
 class RescoreWebhookPayload(BaseModel):
     job_id: str
 
@@ -453,3 +476,51 @@ async def webhook_rescore_job(payload: RescoreWebhookPayload):
     await rescore_all_applications_for_job(job_id, jd_data)
     
     return {"status": "success", "message": f"Đã chấm lại toàn bộ CV cho Job {job_id}"}
+from pydantic import BaseModel
+class AssignJobRequest(BaseModel):
+    hr_user_ids: List[str]
+
+@router.put("/{job_id}/assign")
+async def assign_job(
+    job_id: str,
+    payload: AssignJobRequest,
+    current_user: CurrentUser = Depends(require_hr)
+):
+    if current_user.role != UserRole.HR_OWNER.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Chỉ Owner mới có quyền phân công chiến dịch"
+        )
+
+    if not ObjectId.is_valid(job_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Định dạng Job ID không hợp lệ"
+        )
+
+    job = await JobRepository.get_by_id(job_id)
+
+    if not job or job.get("company_id") != current_user.company_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Không tìm thấy chiến dịch"
+        )
+
+    updated = await JobRepository.update(
+        job_id,
+        {
+            "assigned_hr_ids": payload.hr_user_ids,
+            "updated_at": datetime.now(timezone.utc)
+        }
+    )
+
+    if updated == 0:
+        raise HTTPException(
+            status_code=404,
+            detail="Không thể cập nhật phân công chiến dịch"
+        )
+
+    return {
+        "status": "success",
+        "message": "Đã cập nhật phân công thành công"
+    }

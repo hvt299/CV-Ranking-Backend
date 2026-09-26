@@ -118,3 +118,5 @@ class JobResponse(JobCreateEnterprise):
     is_hot_until: Optional[datetime] = None
     edit_count: Optional[int] = Field(default=0)
     rescore_count: Optional[int] = Field(default=0)
+    
+    assigned_hr_ids: List[str] = Field(default=[])

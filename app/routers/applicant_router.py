@@ -322,11 +322,14 @@ async def upload_cv_to_library(
             "full_name": cv_data.get("candidate_name"),
             "email": cv_data.get("email") or current_applicant.email,
             "phone": cv_data.get("phone"),
+            "github": cv_data.get("github"),
             "linkedin": cv_data.get("linkedin"),
             "portfolio": cv_data.get("portfolio", []),
             "education_level": cv_data.get("education_level", "Không đề cập"),
             "years_of_experience": cv_data.get("years_of_experience", 0),
             "skill_experience": cv_data.get("skill_experience", {}),
+            "languages": cv_data.get("languages", []),
+            "certifications": cv_data.get("certifications", []),
             "job_hops": cv_data.get("job_hops", 1),
             "gap_months": cv_data.get("gap_months", 0),
             "fraud_analysis": fraud_result
@@ -509,6 +512,8 @@ async def get_my_cv_library(current_applicant: CurrentUser = Depends(require_app
         projection={"raw_text": 0, "cv_vector_ref": 0},
         limit=10
     )
+    for cv in cvs:
+        cv["id"] = str(cv.pop("_id", ""))
     return cvs
 
 @router.post("/self-score")
@@ -800,7 +805,7 @@ async def save_job(job_id: str, current_applicant: CurrentUser = Depends(require
 async def unsave_job(job_id: str, current_applicant: CurrentUser = Depends(require_applicant)):
     record = await SavedJobRepository.find_one({"user_id": current_applicant.id, "job_id": job_id})
     if record:
-        await SavedJobRepository.delete(str(record["_id"]))
+        await SavedJobRepository.delete(str(record["id"]))
         from app.repositories.job_repository import JobRepository
         from bson import ObjectId
         await JobRepository.update_custom({"_id": ObjectId(job_id)}, {"$inc": {"save_count": -1}})
@@ -825,7 +830,7 @@ async def get_saved_jobs(current_applicant: CurrentUser = Depends(require_applic
                 "let": {"c_id": {"$toObjectId": "$company_id"}},
                 "pipeline": [
                     {"$match": {"$expr": {"$eq": ["$_id", "$$c_id"]}}},
-                    {"$project": {"name": 1}}
+                    {"$project": {"name": 1, "logo_url": 1}}
                 ],
                 "as": "company_info"
             }
@@ -836,6 +841,7 @@ async def get_saved_jobs(current_applicant: CurrentUser = Depends(require_applic
     for j in jobs:
         j["id"] = j.get("id") or str(j.pop("_id", ""))
         j["company_name"] = j.get("company_info", {}).get("name", "Công ty Ẩn danh")
+        j["company_logo"] = j.get("company_info", {}).get("logo_url")
         j.pop("company_info", None)
     return {"status": "success", "data": jobs}
 
@@ -853,7 +859,7 @@ async def save_company(company_id: str, current_applicant: CurrentUser = Depends
 async def unsave_company(company_id: str, current_applicant: CurrentUser = Depends(require_applicant)):
     record = await SavedCompanyRepository.find_one({"applicant_user_id": current_applicant.id, "company_id": company_id})
     if record:
-        await SavedCompanyRepository.delete(str(record["_id"]))
+        await SavedCompanyRepository.delete(str(record["id"]))
         from app.repositories.company_repository import CompanyRepository
         from bson import ObjectId
         await CompanyRepository.update_custom({"_id": ObjectId(company_id)}, {"$inc": {"save_count": -1}})

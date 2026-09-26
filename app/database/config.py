@@ -63,19 +63,19 @@ async def connect_to_mongo():
         REDIS_URL = os.getenv("REDIS_URL", "")
         if REDIS_URL.startswith(("redis://", "rediss://", "unix://")):
             db_instance.redis = aioredis.from_url(REDIS_URL, decode_responses=True)
-            print("Đã kết nối thành công với MongoDB và Redis Cache!")
+            print("Da ket noi thanh cong voi MongoDB va Redis Cache!")
         else:
             db_instance.redis = None
-            print("Đã kết nối MongoDB! (Bỏ qua Redis Cache do REDIS_URL đang dùng RAM ảo)")
+            print("Da ket noi MongoDB! (Bo qua Redis Cache do REDIS_URL dang dung RAM ao)")
     except Exception as e:
-        print(f"Lỗi kết nối DB/Redis: {e}")
+        print(f"Loi ket noi DB/Redis: {e}")
 
 async def close_mongo_connection():
     if db_instance.client is not None:
         db_instance.client.close()
     if db_instance.redis is not None:
         await db_instance.redis.close()
-    print("Đã ngắt kết nối DB & Redis!")
+    print("Da ngat ket noi DB & Redis!")
 
 def get_db():
     return db_instance.db

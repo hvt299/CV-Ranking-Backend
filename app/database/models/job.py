@@ -9,6 +9,7 @@ class JobDB(JobCreateEnterprise):
     slug: str = Field(..., description="SEO URL (VD: /jobs/senior-backend-dev-abc123)")
     status: JobStatus = Field(default=JobStatus.DRAFT)
     created_by_user_id: str
+    assigned_hr_ids: List[str] = Field(default=[])
     
     is_hot_until: Optional[datetime] = Field(default=None, description="Hạn hết hot")
     

@@ -15,6 +15,9 @@ class AnalyticsService:
         else:
             trend = round(((current - previous) / previous) * 100)
             
+
+
+
         return {
             "value": current,
             "trend": abs(trend),
@@ -85,15 +88,31 @@ class AnalyticsService:
             })
             
         
-        # 2. Team Workload (Mock + actual calculation if possible)
-        # In a real scenario, we count applications assigned to hr members.
-        # For mock, we just generate some random data based on user count
-        team_workload_chart = [
-            {"name": "Trần A", "cv_count": 45, "color": "var(--color-primary-500)", "is_mock": True},
-            {"name": "Nguyễn B", "cv_count": 32, "color": "var(--color-info-500)", "is_mock": True},
-            {"name": "Lê C", "cv_count": 28, "color": "var(--color-success-500)", "is_mock": True},
-            {"name": "Phạm D", "cv_count": 15, "color": "var(--color-warning-500)", "is_mock": True}
-        ]
+        # 2. Team Workload (Real Data)
+        hr_users = await UserRepository.find_many({
+            "company_id": company_id,
+            "role": {"$in": [UserRole.HR_OWNER.value, UserRole.HR_MEMBER.value]},
+            "deleted_at": None
+        }, projection={"_id": 1, "full_name": 1, "id": 1})
+        
+        team_workload_chart = []
+        colors = ["var(--color-primary-500)", "var(--color-info-500)", "var(--color-success-500)", "var(--color-warning-500)"]
+        for idx, u in enumerate(hr_users):
+            uid = str(u.get("id") or u.get("_id"))
+            # Tìm các job mà HR này được assign
+            assigned_jobs_cursor = await JobRepository.find_many({"assigned_hr_ids": uid, "deleted_at": None}, projection={"id": 1, "_id": 1})
+            assigned_job_ids = [str(j.get("id") or j.get("_id")) for j in assigned_jobs_cursor]
+            
+            # Nếu có job được assign, tính tổng số CV của các job đó
+            count = 0
+            if assigned_job_ids:
+                count = await ApplicationRepository.count_documents({"job_id": {"$in": assigned_job_ids}, "deleted_at": None})
+            
+            team_workload_chart.append({
+                "name": u.get("full_name") or "Ẩn danh",
+                "cv_count": count,
+                "color": colors[idx % len(colors)]
+            })
 
         
         # 4. Pipeline Health (Real Pipeline)
@@ -108,16 +127,24 @@ class AnalyticsService:
             {"status": ApplicationStatus.NEW.value, "name": "Mới", "value": ph_dict.get(ApplicationStatus.NEW.value, 0), "fill": "#94a3b8"},
             {"status": ApplicationStatus.REVIEWING.value, "name": "Đang xem xét", "value": ph_dict.get(ApplicationStatus.REVIEWING.value, 0), "fill": "var(--color-info-500)"},
             {"status": ApplicationStatus.INTERVIEW.value, "name": "Phỏng vấn", "value": ph_dict.get(ApplicationStatus.INTERVIEW.value, 0), "fill": "var(--color-warning-500)"},
-            {"status": ApplicationStatus.HIRED.value, "name": "Đã tuyển", "value": ph_dict.get(ApplicationStatus.HIRED.value, 0), "fill": "var(--color-success-500)"}
+            {"status": ApplicationStatus.OFFERED.value, "name": "Đề nghị (Offer)", "value": ph_dict.get(ApplicationStatus.OFFERED.value, 0), "fill": "var(--color-primary-500)"},
+            {"status": ApplicationStatus.HIRED.value, "name": "Đã tuyển", "value": ph_dict.get(ApplicationStatus.HIRED.value, 0), "fill": "var(--color-success-500)"},
+            {"status": ApplicationStatus.REJECTED.value, "name": "Từ chối", "value": ph_dict.get(ApplicationStatus.REJECTED.value, 0), "fill": "var(--color-error-500)"},
+            {"status": ApplicationStatus.WITHDRAWN.value, "name": "Đã rút hồ sơ", "value": ph_dict.get(ApplicationStatus.WITHDRAWN.value, 0), "fill": "var(--color-slate-500)"},
+            {"status": ApplicationStatus.EXPIRED.value, "name": "Hết hạn", "value": ph_dict.get(ApplicationStatus.EXPIRED.value, 0), "fill": "var(--color-slate-300)"}
         ]
 
         
-        # 3. Hiring Goal (Mock)
+
+        # 3. Hiring Goal (Real Calculation based on Job headcount)
+        jobs_cursor = await JobRepository.find_many({"company_id": company_id, "deleted_at": None, "status": JobStatus.OPEN.value}, projection={"headcount": 1})
+        total_headcount = sum(j.get("headcount", 1) for j in jobs_cursor)
+        
         hiring_goal = {
-            "target": 50,
-            "actual": ph_dict.get(ApplicationStatus.HIRED.value, 12) if 'ph_dict' in locals() else 12,
-            "is_mock": True
+            "target": total_headcount,
+            "actual": ph_dict.get(ApplicationStatus.HIRED.value, 0) if 'ph_dict' in locals() else 0
         }
+
         return {
             "scope": "company",
             "overview_stats": {
@@ -141,6 +168,8 @@ class AnalyticsService:
 
     @classmethod
     async def get_member_workspace_metrics(cls, user_id: str) -> Dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        thirty_days_ago = now - timedelta(days=30)
         # Member works on assigned jobs
         assigned_jobs = await JobRepository.get_active_pipelines({"assigned_hr_ids": user_id})
         
@@ -210,11 +239,8 @@ class AnalyticsService:
                 day["count"] = count
                 if count > 0: has_real_velocity = True
                 
-        if not has_real_velocity:
-            import random
-            for day in velocity_chart:
-                day["count"] = random.randint(2, 15)
-                day["is_mock"] = True
+
+                
             
         # 2. AI Score Histogram for Assigned Jobs
         ai_score_histogram = []
@@ -227,12 +253,7 @@ class AnalyticsService:
                 elif bound == 50: ai_score_histogram.append({"name": "50-80", "value": count, "color": "var(--color-warning-500)"})
                 elif bound == 80: ai_score_histogram.append({"name": ">80", "value": count, "color": "var(--color-success-500)"})
 
-        if not ai_score_histogram:
-            ai_score_histogram = [
-                {"name": "<50", "value": 12, "color": "var(--color-error-500)", "is_mock": True},
-                {"name": "50-80", "value": 45, "color": "var(--color-warning-500)", "is_mock": True},
-                {"name": ">80", "value": 28, "color": "var(--color-success-500)", "is_mock": True}
-            ]
+
 
         # 3. Status Distribution
         status_distribution = []
@@ -248,88 +269,49 @@ class AnalyticsService:
                     "value": item["count"]
                 })
         
-        if not status_distribution:
-            status_distribution = [
-                {"name": "Mới", "value": 24, "color": "#94a3b8", "is_mock": True},
-                {"name": "Đang xem xét", "value": 15, "color": "var(--color-info-500)", "is_mock": True},
-                {"name": "Phỏng vấn", "value": 8, "color": "var(--color-warning-500)", "is_mock": True},
-                {"name": "Đã tuyển", "value": 3, "color": "var(--color-success-500)", "is_mock": True}
-            ]
+
         
-        # 4. Time in Stage (Mock)
-        time_in_stage = [
-            {"name": "Mới nộp", "days": 1.5, "color": "var(--color-info-500)", "is_mock": True},
-            {"name": "Đang xem xét", "days": 3.2, "color": "var(--color-warning-500)", "is_mock": True},
-            {"name": "Phỏng vấn", "days": 5.4, "color": "var(--color-primary-500)", "is_mock": True},
-            {"name": "Offer", "days": 2.1, "color": "var(--color-success-500)", "is_mock": True}
-        ]
-
-        # 5. Personal Funnel (Mock)
-        # If total_cvs_managed is 0, provide some non-zero mockup
-        mock_total = total_cvs_managed if total_cvs_managed > 0 else 85
-        mock_interviews = len(interviews) if len(interviews) > 0 else 4
-        
-        personal_funnel = [
-            {"name": "Tổng xử lý", "value": mock_total, "color": "var(--color-slate-400)", "is_mock": True},
-            {"name": "Pass CV", "value": int(mock_total * 0.4), "color": "var(--color-info-500)", "is_mock": True},
-            {"name": "Phỏng vấn", "value": mock_interviews * 4, "color": "var(--color-primary-500)", "is_mock": True},
-            {"name": "Đã tuyển", "value": mock_interviews, "color": "var(--color-success-500)", "is_mock": True}
-        ]
-
-        # If empty, add mock data
-        if not assigned_jobs:
-            assigned_jobs = [
-                {
-                    "job_id": "mock_1",
-                    "title": "Senior Frontend Developer (Mock)",
-                    "total_cvs": 120,
-                    "new_cvs": 5,
-                    "current_hired": 2,
-                    "target_hiring": 5
-                },
-                {
-                    "job_id": "mock_2",
-                    "title": "Product Designer (Mock)",
-                    "total_cvs": 45,
-                    "new_cvs": 0,
-                    "current_hired": 1,
-                    "target_hiring": 2
-                }
+        time_in_stage = []
+        if job_ids:
+            time_pipeline = [
+                {"$match": {"job_id": {"$in": job_ids}, "status": ApplicationStatus.HIRED.value, "deleted_at": None}},
+                {"$project": {
+                    "month": {"$dateToString": {"format": "%m", "date": "$applied_at"}},
+                    "diff_ms": {"$subtract": ["$updated_at", "$applied_at"]}
+                }},
+                {"$group": {"_id": "$month", "avg_ms": {"$avg": "$diff_ms"}}},
+                {"$sort": {"_id": 1}}
             ]
+            raw_time = await ApplicationRepository.aggregate_applications(time_pipeline)
+            for item in raw_time:
+                days = item["avg_ms"] / (1000 * 60 * 60 * 24) if item.get("avg_ms") else 0
+                month_str = item.get("_id")
+                if month_str:
+                    time_in_stage.append({
+                        "date": f"Tháng {month_str}",
+                        "days": round(days, 1)
+                    })
 
-        if not today_schedule:
-            today_schedule = [
-                {"time": "09:00", "title": "Phỏng vấn Đỗ Văn A", "subtitle": "Senior Frontend", "type": "interview"},
-                {"time": "14:30", "title": "Phỏng vấn Lê Thị B", "subtitle": "Product Designer", "type": "interview"},
-                {"time": "16:00", "title": "Họp Sync Team Tuyển dụng", "subtitle": "Đánh giá KPI tuần", "type": "meeting"}
-            ]
 
-        if not recent_apps:
-            recent_apps = [
-                {
-                    "id": "mock_a1",
-                    "job_id": "mock_1",
-                    "candidate_name": "Đỗ Văn A",
-                    "job_title": "Senior Frontend Developer",
-                    "status": "new",
-                    "ai_score": 85
-                },
-                {
-                    "id": "mock_a2",
-                    "job_id": "mock_2",
-                    "candidate_name": "Lê Thị B",
-                    "job_title": "Product Designer",
-                    "status": "reviewing",
-                    "ai_score": 72
-                },
-                {
-                    "id": "mock_a3",
-                    "job_id": "mock_1",
-                    "candidate_name": "Nguyễn Văn C",
-                    "job_title": "Senior Frontend Developer",
-                    "status": "rejected",
-                    "ai_score": 45
-                }
+
+
+
+
+
+        personal_funnel = []
+        if job_ids:
+            raw_funnel = await ApplicationRepository.get_funnel_stats(job_ids)
+            f_dict = {item.get("_id"): item["count"] for item in raw_funnel}
+            
+            personal_funnel = [
+                {"name": "Mới nộp", "value": f_dict.get(ApplicationStatus.NEW.value, 0), "fill": "#94a3b8", "color": "#94a3b8"},
+                {"name": "Đang xem xét", "value": f_dict.get(ApplicationStatus.REVIEWING.value, 0), "fill": "var(--color-info-500)", "color": "var(--color-info-500)"},
+                {"name": "Phỏng vấn", "value": f_dict.get(ApplicationStatus.INTERVIEW.value, 0), "fill": "var(--color-warning-500)", "color": "var(--color-warning-500)"},
+                {"name": "Đề nghị (Offer)", "value": f_dict.get(ApplicationStatus.OFFERED.value, 0), "fill": "var(--color-primary-500)", "color": "var(--color-primary-500)"},
+                {"name": "Trúng tuyển", "value": f_dict.get(ApplicationStatus.HIRED.value, 0), "fill": "var(--color-success-500)", "color": "var(--color-success-500)"},
+                {"name": "Từ chối", "value": f_dict.get(ApplicationStatus.REJECTED.value, 0), "fill": "var(--color-error-500)", "color": "var(--color-error-500)"},
+                {"name": "Đã rút hồ sơ", "value": f_dict.get(ApplicationStatus.WITHDRAWN.value, 0), "fill": "var(--color-slate-500)", "color": "var(--color-slate-500)"},
+                {"name": "Hết hạn", "value": f_dict.get(ApplicationStatus.EXPIRED.value, 0), "fill": "var(--color-slate-300)", "color": "var(--color-slate-300)"}
             ]
 
         return {
@@ -359,7 +341,10 @@ class AnalyticsService:
             return {"is_pro_active": False, "data": None, "message": "Công ty không tồn tại"}
 
         # Require PRO
-        is_pro = True # Tạm thời bypass để test UI
+        plan_id = company.get("current_plan_id")
+        from app.repositories.subscription_plan_repository import SubscriptionPlanRepository
+        plan_data = await SubscriptionPlanRepository.get_by_id(plan_id) if plan_id else None
+        is_pro = plan_data and plan_data.get("plan_code") not in ["hr_free", "app_free"]
 
         if not is_pro:
             return {
@@ -379,21 +364,18 @@ class AnalyticsService:
 
         raw_funnel = await ApplicationRepository.get_funnel_stats(job_ids)
         funnel_dict = {item.get("_id"): item["count"] for item in raw_funnel}
-        total_cv = sum(funnel_dict.values())
-        pass_ai = total_cv - funnel_dict.get(ApplicationStatus.NEW.value, 0) - funnel_dict.get(ApplicationStatus.REJECTED.value, 0)
-        reviewing = funnel_dict.get(ApplicationStatus.REVIEWING.value, 0)
-        interview = funnel_dict.get(ApplicationStatus.INTERVIEW.value, 0)
-        offered = funnel_dict.get(ApplicationStatus.OFFERED.value, 0)
-        hired = funnel_dict.get(ApplicationStatus.HIRED.value, 0)
-
+        
         funnel_chart = [
-            { "name": "Tổng CV", "value": total_cv, "fill": "var(--color-primary-500)", "color": "var(--color-primary-500)" },
-            { "name": "Đang xem xét", "value": reviewing, "fill": "var(--color-info-500)", "color": "var(--color-info-500)" },
-            { "name": "Pass AI (>50đ)", "value": pass_ai, "fill": "var(--color-success-500)", "color": "var(--color-success-500)" },
-            { "name": "Phỏng vấn", "value": interview, "fill": "var(--color-warning-500)", "color": "var(--color-warning-500)" },
-            { "name": "Đề nghị (Offer)", "value": offered, "fill": "var(--color-rose-500)", "color": "var(--color-rose-500)" },
-            { "name": "Đã Tuyển", "value": hired, "fill": "var(--color-success-600)", "color": "var(--color-success-600)" }
+            {"name": "Mới nộp", "value": funnel_dict.get(ApplicationStatus.NEW.value, 0), "fill": "#94a3b8", "color": "#94a3b8"},
+            {"name": "Đang xem xét", "value": funnel_dict.get(ApplicationStatus.REVIEWING.value, 0), "fill": "var(--color-info-500)", "color": "var(--color-info-500)"},
+            {"name": "Phỏng vấn", "value": funnel_dict.get(ApplicationStatus.INTERVIEW.value, 0), "fill": "var(--color-warning-500)", "color": "var(--color-warning-500)"},
+            {"name": "Đề nghị (Offer)", "value": funnel_dict.get(ApplicationStatus.OFFERED.value, 0), "fill": "var(--color-primary-500)", "color": "var(--color-primary-500)"},
+            {"name": "Trúng tuyển", "value": funnel_dict.get(ApplicationStatus.HIRED.value, 0), "fill": "var(--color-success-500)", "color": "var(--color-success-500)"},
+            {"name": "Từ chối", "value": funnel_dict.get(ApplicationStatus.REJECTED.value, 0), "fill": "var(--color-error-500)", "color": "var(--color-error-500)"},
+            {"name": "Đã rút hồ sơ", "value": funnel_dict.get(ApplicationStatus.WITHDRAWN.value, 0), "fill": "var(--color-slate-500)", "color": "var(--color-slate-500)"},
+            {"name": "Hết hạn", "value": funnel_dict.get(ApplicationStatus.EXPIRED.value, 0), "fill": "var(--color-slate-300)", "color": "var(--color-slate-300)"}
         ]
+
 
         raw_ai = await ApplicationRepository.get_ai_score_distribution(job_ids)
         score_chart = []
@@ -502,27 +484,68 @@ class AnalyticsService:
             label = "Mới tốt nghiệp" if val == 0 else f"{val} năm kinh nghiệm"
             exp_chart.append({"name": label, "value": item["count"], "color": colors[idx % len(colors)]})
 
-        # Mock Source ROI
-        source_roi = [
-            {"name": "Facebook", "value": 45, "hired": 5, "color": "var(--color-primary-500)", "is_mock": True},
-            {"name": "LinkedIn", "value": 30, "hired": 12, "color": "var(--color-info-500)", "is_mock": True},
-            {"name": "Referral", "value": 15, "hired": 8, "color": "var(--color-success-500)", "is_mock": True},
-            {"name": "Organic", "value": 10, "hired": 2, "color": "var(--color-slate-400)", "is_mock": True}
+        # 7. Real Source ROI
+        source_pipeline = [
+            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None}},
+            {"$group": {
+                "_id": "$source", 
+                "value": {"$sum": 1}, 
+                "hired": {"$sum": {"$cond": [{"$eq": ["$status", ApplicationStatus.HIRED.value]}, 1, 0]}}
+            }},
+            {"$sort": {"value": -1}}
         ]
+        raw_source = await ApplicationRepository.aggregate_applications(source_pipeline)
+        source_roi = []
+        source_colors = ["var(--color-primary-500)", "var(--color-info-500)", "var(--color-success-500)", "var(--color-warning-500)", "var(--color-slate-400)"]
+        for idx, item in enumerate(raw_source):
+            src_val = item.get("_id") or "Khác"
+            source_roi.append({
+                "name": src_val.capitalize() if isinstance(src_val, str) else src_val,
+                "value": item["value"],
+                "hired": item["hired"],
+                "color": source_colors[idx % len(source_colors)]
+            })
 
-        # Mock Time to Hire
+        # 8. Real Time to Hire (days)
+        time_pipeline = [
+            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "status": ApplicationStatus.HIRED.value}},
+            {"$project": {
+                "month": {"$dateToString": {"format": "%m", "date": "$applied_at"}},
+                "diff_ms": {"$subtract": ["$updated_at", "$applied_at"]}
+            }},
+            {"$group": {
+                "_id": "$month",
+                "avg_ms": {"$avg": "$diff_ms"}
+            }},
+            {"$sort": {"_id": 1}}
+        ]
+        raw_time = await ApplicationRepository.aggregate_applications(time_pipeline)
         time_to_hire = []
-        for i in range(5, -1, -1):
-            date_str = (now - timedelta(days=30*i)).strftime("Tháng %m")
-            time_to_hire.append({"date": date_str, "days": 25 - i*2, "is_mock": True})
+        for item in raw_time:
+            days = item["avg_ms"] / (1000 * 60 * 60 * 24) if item["avg_ms"] else 0
+            month_str = item.get("_id")
+            if month_str:
+                time_to_hire.append({"date": f"Tháng {month_str}", "days": round(days, 1)})
 
-        # Mock Knockout Analysis
-        knockout_analysis = [
-            {"name": "Tiếng Anh IELTS 6.5", "value": 124, "color": "var(--color-error-500)", "is_mock": True},
-            {"name": "Kinh nghiệm > 3 năm", "value": 85, "color": "var(--color-warning-500)", "is_mock": True},
-            {"name": "Bằng Đại học", "value": 42, "color": "var(--color-info-500)", "is_mock": True},
-            {"name": "ReactJS (Bắt buộc)", "value": 31, "color": "var(--color-primary-500)", "is_mock": True}
+        # 9. Real Knockout Analysis
+        knockout_pipeline = [
+            {"$match": {"company_id": company_id, "status": ApplicationStatus.REJECTED.value, "deleted_at": None}},
+            {"$unwind": {"path": "$ai_score.skill_details", "preserveNullAndEmptyArrays": False}},
+            {"$match": {"ai_score.skill_details.matched": False}},
+            {"$group": {"_id": "$ai_score.skill_details.skill", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 5}
         ]
+        knockout_results = await ApplicationRepository.aggregate_applications(knockout_pipeline)
+        knockout_analysis = []
+        colors = ["var(--color-rose-500)", "var(--color-orange-500)", "var(--color-warning-500)", "var(--color-amber-500)", "var(--color-yellow-500)"]
+        for i, k in enumerate(knockout_results):
+            if k["_id"]:
+                knockout_analysis.append({
+                    "name": k["_id"],
+                    "value": k["count"],
+                    "color": colors[i % len(colors)]
+                })
 
         
         # Experience Distribution (Moved from Dashboard)
@@ -539,27 +562,68 @@ class AnalyticsService:
             label = "Mới tốt nghiệp" if val == 0 else f"{val} năm kinh nghiệm"
             exp_chart.append({"name": label, "value": item["count"], "color": colors[idx % len(colors)]})
 
-        # Mock Source ROI
-        source_roi = [
-            {"name": "Facebook", "value": 45, "hired": 5, "color": "var(--color-primary-500)", "is_mock": True},
-            {"name": "LinkedIn", "value": 30, "hired": 12, "color": "var(--color-info-500)", "is_mock": True},
-            {"name": "Referral", "value": 15, "hired": 8, "color": "var(--color-success-500)", "is_mock": True},
-            {"name": "Organic", "value": 10, "hired": 2, "color": "var(--color-slate-400)", "is_mock": True}
+        # 7. Real Source ROI
+        source_pipeline = [
+            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None}},
+            {"$group": {
+                "_id": "$source", 
+                "value": {"$sum": 1}, 
+                "hired": {"$sum": {"$cond": [{"$eq": ["$status", ApplicationStatus.HIRED.value]}, 1, 0]}}
+            }},
+            {"$sort": {"value": -1}}
         ]
+        raw_source = await ApplicationRepository.aggregate_applications(source_pipeline)
+        source_roi = []
+        source_colors = ["var(--color-primary-500)", "var(--color-info-500)", "var(--color-success-500)", "var(--color-warning-500)", "var(--color-slate-400)"]
+        for idx, item in enumerate(raw_source):
+            src_val = item.get("_id") or "Khác"
+            source_roi.append({
+                "name": src_val.capitalize() if isinstance(src_val, str) else src_val,
+                "value": item["value"],
+                "hired": item["hired"],
+                "color": source_colors[idx % len(source_colors)]
+            })
 
-        # Mock Time to Hire
+        # 8. Real Time to Hire (days)
+        time_pipeline = [
+            {"$match": {"job_id": {"$in": job_ids}, "deleted_at": None, "status": ApplicationStatus.HIRED.value}},
+            {"$project": {
+                "month": {"$dateToString": {"format": "%m", "date": "$applied_at"}},
+                "diff_ms": {"$subtract": ["$updated_at", "$applied_at"]}
+            }},
+            {"$group": {
+                "_id": "$month",
+                "avg_ms": {"$avg": "$diff_ms"}
+            }},
+            {"$sort": {"_id": 1}}
+        ]
+        raw_time = await ApplicationRepository.aggregate_applications(time_pipeline)
         time_to_hire = []
-        for i in range(5, -1, -1):
-            date_str = (now - timedelta(days=30*i)).strftime("Tháng %m")
-            time_to_hire.append({"date": date_str, "days": 25 - i*2, "is_mock": True})
+        for item in raw_time:
+            days = item["avg_ms"] / (1000 * 60 * 60 * 24) if item["avg_ms"] else 0
+            month_str = item.get("_id")
+            if month_str:
+                time_to_hire.append({"date": f"Tháng {month_str}", "days": round(days, 1)})
 
-        # Mock Knockout Analysis
-        knockout_analysis = [
-            {"name": "Tiếng Anh IELTS 6.5", "value": 124, "color": "var(--color-error-500)", "is_mock": True},
-            {"name": "Kinh nghiệm > 3 năm", "value": 85, "color": "var(--color-warning-500)", "is_mock": True},
-            {"name": "Bằng Đại học", "value": 42, "color": "var(--color-info-500)", "is_mock": True},
-            {"name": "ReactJS (Bắt buộc)", "value": 31, "color": "var(--color-primary-500)", "is_mock": True}
+        # 9. Real Knockout Analysis
+        knockout_pipeline = [
+            {"$match": {"company_id": company_id, "status": ApplicationStatus.REJECTED.value, "deleted_at": None}},
+            {"$unwind": {"path": "$ai_score.skill_details", "preserveNullAndEmptyArrays": False}},
+            {"$match": {"ai_score.skill_details.matched": False}},
+            {"$group": {"_id": "$ai_score.skill_details.skill", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 5}
         ]
+        knockout_results = await ApplicationRepository.aggregate_applications(knockout_pipeline)
+        knockout_analysis = []
+        colors = ["var(--color-rose-500)", "var(--color-orange-500)", "var(--color-warning-500)", "var(--color-amber-500)", "var(--color-yellow-500)"]
+        for i, k in enumerate(knockout_results):
+            if k["_id"]:
+                knockout_analysis.append({
+                    "name": k["_id"],
+                    "value": k["count"],
+                    "color": colors[i % len(colors)]
+                })
 
         return {
             "is_pro_active": True,
@@ -829,8 +893,8 @@ class AnalyticsService:
         # 5. Top 10 Skills
         raw_skills = await JobRepository.aggregate_jobs([
             {"$match": {"deleted_at": None}},
-            {"$unwind": "$skills_required"},
-            {"$group": {"_id": "$skills_required.skill_name", "count": {"$sum": 1}}},
+            {"$unwind": "$required_skills"},
+            {"$group": {"_id": "$required_skills.name", "count": {"$sum": 1}}},
             {"$sort": {"count": -1}},
             {"$limit": 10}
         ])

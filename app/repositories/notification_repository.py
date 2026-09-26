@@ -34,7 +34,8 @@ class NotificationRepository(BaseRepository):
         cursor = db[cls.collection_name].find(query).sort("created_at", -1)
         if limit:
             cursor = cursor.limit(limit)
-        return await cursor.to_list(length=limit)
+        docs = await cursor.to_list(length=limit)
+        return [cls._format_doc(doc) for doc in docs]
 
     @classmethod
     async def get_unread_count(cls, recipient_user_id: str) -> int:

@@ -427,3 +427,50 @@ async def assign_member_to_department(
     })
 
     return {"status": "success", "message": "Đã cập nhật phân bổ phòng ban cho nhân sự"}
+from pydantic import BaseModel
+
+class RoleUpdateRequest(BaseModel):
+    role: str
+
+@router.patch("/members/{user_id}/role")
+async def update_member_role(
+    user_id: str,
+    payload: RoleUpdateRequest,
+    current_user: CurrentUser = Depends(require_hr)
+):
+    if current_user.role != UserRole.HR_OWNER.value:
+        raise HTTPException(status_code=403, detail="Chỉ Owner mới có quyền thay đổi vai trò thành viên")
+        
+    if current_user.id == user_id:
+        raise HTTPException(status_code=400, detail="Không thể tự thay đổi vai trò của chính mình")
+        
+    target_user = await UserRepository.get_by_id(user_id)
+    if not target_user or target_user.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy thành viên trong công ty")
+        
+    if payload.role not in [UserRole.HR_OWNER.value, UserRole.HR_MEMBER.value]:
+        raise HTTPException(status_code=400, detail="Vai trò không hợp lệ")
+        
+    await UserRepository.update_by_query({"_id": ObjectId(user_id)}, {"$set": {"role": payload.role}})
+    return {"status": "success", "message": "Đã cập nhật vai trò thành công"}
+
+@router.delete("/members/{user_id}")
+async def remove_member(
+    user_id: str,
+    current_user: CurrentUser = Depends(require_hr)
+):
+    if current_user.role != UserRole.HR_OWNER.value:
+        raise HTTPException(status_code=403, detail="Chỉ Owner mới có quyền xóa thành viên")
+        
+    if current_user.id == user_id:
+        raise HTTPException(status_code=400, detail="Không thể tự xóa chính mình khỏi công ty")
+        
+    target_user = await UserRepository.get_by_id(user_id)
+    if not target_user or target_user.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy thành viên trong công ty")
+        
+    await UserRepository.update_by_query(
+        {"_id": ObjectId(user_id)}, 
+        {"$set": {"company_id": None, "role": UserRole.USER.value}}
+    )
+    return {"status": "success", "message": "Đã xóa thành viên khỏi công ty"}

@@ -69,7 +69,8 @@ async def get_system_health(current_admin: CurrentUser = Depends(require_admin))
         "fastapi": "Hoạt động",
         "mongodb": "Không phản hồi",
         "redis": "Bỏ qua",
-        "gemini_2_0": "Không phản hồi",
+        "gemini_3_6": "Không phản hồi",
+        "gemini_3_1_lite": "Không phản hồi",
         "gemini_2_5": "Không phản hồi",
         "bgem3": "Không phản hồi"
     }
@@ -94,24 +95,52 @@ async def get_system_health(current_admin: CurrentUser = Depends(require_admin))
     gemini_key = os.getenv("GEMINI_API_KEY")
     if gemini_key:
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                # Check 2.0 Flash
-                resp20 = await client.get(f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash?key={gemini_key}")
-                if resp20.status_code == 200:
-                    health["gemini_2_0"] = "Hoạt động"
-                else:
-                    health["gemini_2_0"] = f"Lỗi {resp20.status_code}"
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                payload = {"contents":[{"parts":[{"text":"ping"}]}]}
+                
+                # Check 3.6 Flash
+                try:
+                    resp36 = await client.post(
+                        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={gemini_key}",
+                        json=payload
+                    )
+                    if resp36.status_code == 200:
+                        health["gemini_3_6"] = "Hoạt động"
+                    else:
+                        health["gemini_3_6"] = f"Lỗi {resp36.status_code}"
+                except Exception as e:
+                    health["gemini_3_6"] = f"Mất kết nối"
+
+                # Check 3.1 Flash Lite
+                try:
+                    resp31 = await client.post(
+                        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={gemini_key}",
+                        json=payload
+                    )
+                    if resp31.status_code == 200:
+                        health["gemini_3_1_lite"] = "Hoạt động"
+                    else:
+                        health["gemini_3_1_lite"] = f"Lỗi {resp31.status_code}"
+                except Exception as e:
+                    health["gemini_3_1_lite"] = f"Mất kết nối"
 
                 # Check 2.5 Flash
-                resp25 = await client.get(f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash?key={gemini_key}")
-                if resp25.status_code == 200:
-                    health["gemini_2_5"] = "Hoạt động"
-                else:
-                    health["gemini_2_5"] = f"Lỗi {resp25.status_code}"
+                try:
+                    resp25 = await client.post(
+                        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}",
+                        json=payload
+                    )
+                    if resp25.status_code == 200:
+                        health["gemini_2_5"] = "Hoạt động"
+                    else:
+                        health["gemini_2_5"] = f"Lỗi {resp25.status_code}"
+                except Exception as e:
+                    health["gemini_2_5"] = f"Mất kết nối"
         except Exception:
             pass
     else:
-        health["gemini_2_0"] = "Thiếu API Key"
+        health["gemini_3_6"] = "Thiếu API Key"
+        health["gemini_3_1_lite"] = "Thiếu API Key"
         health["gemini_2_5"] = "Thiếu API Key"
             
     # 4. BGE-M3

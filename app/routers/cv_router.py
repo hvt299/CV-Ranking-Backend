@@ -22,7 +22,7 @@ from app.services.ai_scoring_service import AIScoringService
 from app.services.audit_service import log_action
 from app.services.vector_engine import compress_jd_data, get_embedding
 from app.services.nlp_engine import GLOBAL_SYSTEM_SETTINGS
-from app.core.security import require_hr, require_hr_or_admin, get_scope_filter, CurrentUser
+from app.core.security import ensure_job_manager, require_hr, require_hr_or_admin, get_scope_filter, CurrentUser
 from app.middleware.rate_limit import limiter
 from app.middleware.subscription import require_tier, require_credits
 from app.services.storage_service import upload_file_to_cloudinary, delete_file_from_cloudinary
@@ -116,11 +116,16 @@ async def upload_cv_to_pool(
             "full_name": cv_data.get("candidate_name"),
             "email": cv_data.get("email"),
             "phone": cv_data.get("phone"),
+            "github": cv_data.get("github"),
             "linkedin": cv_data.get("linkedin"),
             "portfolio": cv_data.get("portfolio", []),
             "skill_experience": cv_data.get("skill_experience", {}),
             "education_level": cv_data.get("education_level", "Không đề cập"),
             "years_of_experience": cv_data.get("years_of_experience", 0),
+            "languages": cv_data.get("languages", []),
+            "certifications": cv_data.get("certifications", []),
+            "job_hops": cv_data.get("job_hops", 1),
+            "gap_months": cv_data.get("gap_months", 0),
             "fraud_analysis": fraud_result
         },
         "extracted_skills": cv_data.get("skills", []),
@@ -334,6 +339,8 @@ async def update_application_status(
         current_app = await ApplicationRepository.find_one(filter_query)
         if not current_app:
             raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển này")
+            
+        await ensure_job_manager(current_app.get("job_id"), current_user)
 
         update_query = {"$set": {}, "$push": {}}
 
@@ -568,6 +575,7 @@ class ViewToggleRequest(BaseModel):
 async def toggle_application_viewed(
     app_id: str, 
     payload: ViewToggleRequest = Body(...),
+    current_user: CurrentUser = Depends(require_hr_or_admin),
     scope_filter: dict = Depends(get_scope_filter)
 ):
     set_data = {"is_viewed": payload.is_viewed, "updated_at": datetime.now(timezone.utc)}
@@ -578,6 +586,11 @@ async def toggle_application_viewed(
         {"_id": ObjectId(app_id), **scope_filter},
         {"$set": set_data}
     )
+    
+    current_app = await ApplicationRepository.get_by_id(app_id)
+    if current_app:
+        await ensure_job_manager(current_app.get("job_id"), current_user)
+        
     if modified == 0:
         raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển")
     return {"status": "success", "is_viewed": payload.is_viewed}
@@ -585,14 +598,17 @@ async def toggle_application_viewed(
 @router.get("/applications/{app_id}/ai-interview", dependencies=[Depends(require_hr_or_admin)])
 async def get_ai_interview_questions(
     app_id: str, 
+    current_user: CurrentUser = Depends(require_hr_or_admin),
     scope_filter: dict = Depends(get_scope_filter),
     # LƯU Ý: CẤM XÓA VĨNH VIỄN ĐOẠN NÀY
-    # _ = Depends(require_credits(action_type="AI_INTERVIEW_GEN"))
+    _ = Depends(require_credits(action_type="AI_INTERVIEW_GEN"))
 ):
     filter_query = {"_id": ObjectId(app_id), **scope_filter}
     app_record = await ApplicationRepository.find_one(filter_query)
     if not app_record:
         raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển này")
+        
+    await ensure_job_manager(app_record.get("job_id"), current_user)
 
     existing_questions = app_record.get("ai_interview_questions")
     if existing_questions:
@@ -641,6 +657,19 @@ async def bookmark_candidate_to_pool(
     
     _id = await TalentPoolRepository.create(record)
     return {"status": "success", "message": "Đã lưu ứng viên vào Talent Pool", "id": _id}
+
+@router.delete("/talent-pool/bookmark/{applicant_user_id}", dependencies=[Depends(require_hr)])
+async def remove_candidate_from_pool(
+    applicant_user_id: str,
+    current_user: CurrentUser = Depends(require_hr)
+):
+    deleted_count = await TalentPoolRepository.delete_many({
+        "applicant_user_id": applicant_user_id,
+        "company_id": current_user.company_id
+    })
+    if deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Không tìm thấy ứng viên trong Talent Pool")
+    return {"status": "success", "message": "Đã bỏ lưu ứng viên khỏi Talent Pool"}
 
 @router.get("/talent-pool/bookmarked", dependencies=[Depends(require_hr)])
 async def get_bookmarked_candidates(current_user: CurrentUser = Depends(require_hr)):

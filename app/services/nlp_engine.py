@@ -199,6 +199,7 @@ def extract_basic_info(text: str) -> Dict:
 
 def extract_social_links(text: str) -> dict:
     links = {
+        "github": None,
         "linkedin": None,
         "portfolio": []
     }
@@ -221,6 +222,9 @@ def extract_social_links(text: str) -> dict:
         if 'linkedin.com' in url:
             if not links['linkedin']:
                 links['linkedin'] = url
+        elif 'github.com' in url:
+            if not links['github']:
+                links['github'] = url
         else:
             if url not in links['portfolio']:
                 links['portfolio'].append(url)
@@ -371,9 +375,9 @@ async def analyze_cv_text(text: str) -> Dict:
         "education_level": final_edu,
         "job_hops": final_job_hops,
         "gap_months": final_gap_months,
-        "github": social_links["github"],
-        "linkedin": social_links["linkedin"],
-        "portfolio": social_links["portfolio"]
+        "github": social_links.get("github"),
+        "linkedin": social_links.get("linkedin"),
+        "portfolio": social_links.get("portfolio", [])
     }
 
 def get_normalized_skill(raw_skill: str, industry: str = "all") -> str:

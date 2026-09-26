@@ -79,21 +79,29 @@ async def extract_cv_metrics_with_llm(raw_text: str) -> dict:
 
     try:
         response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.6-flash',
             contents=prompt,
             config=generation_config
         )
     except Exception as e:
-        logger.warning(f"Gemini 2.5 Flash thất bại ({e}). Thử lại với 2.0 Flash...")
+        logger.warning(f"Lỗi gọi Gemini 3.6 Flash: {e}. Thử lại với Gemini 3.1 Flash Lite...")
         try:
             response = await client.aio.models.generate_content(
-                model='gemini-2.0-flash',
+                model='gemini-3.1-flash-lite',
                 contents=prompt,
                 config=generation_config
             )
         except Exception as e2:
-            logger.error(f"Cả 2 model Gemini đều thất bại: {e2}")
-            return fallback_data
+            logger.warning(f"Lỗi gọi Gemini 3.1 Flash Lite: {e2}. Thử lại với Gemini 2.5 Flash...")
+            try:
+                response = await client.aio.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=prompt,
+                    config=generation_config
+                )
+            except Exception as e3:
+                logger.error(f"Lỗi gọi cả 3 mô hình Gemini (3.6, 3.1, 2.5): {e3}")
+                return fallback_data
 
     try:
         data = json.loads(response.text)
@@ -133,11 +141,29 @@ async def generate_interview_questions(cv_text: str, jd_text: str) -> list:
 
     try:
         response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.6-flash',
             contents=prompt,
             config=generation_config
         )
         return json.loads(response.text)
     except Exception as e:
-        logger.error(f"Lỗi sinh câu hỏi từ LLM: {e}")
-        return []
+        logger.warning(f"Lỗi sinh câu hỏi từ LLM (3.6 Flash): {e}. Thử lại với Gemini 3.1 Flash Lite...")
+        try:
+            response = await client.aio.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=prompt,
+                config=generation_config
+            )
+            return json.loads(response.text)
+        except Exception as e2:
+            logger.warning(f"Lỗi sinh câu hỏi từ LLM (3.1 Flash Lite): {e2}. Thử lại với Gemini 2.5 Flash...")
+            try:
+                response = await client.aio.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=prompt,
+                    config=generation_config
+                )
+                return json.loads(response.text)
+            except Exception as e3:
+                logger.error(f"Lỗi sinh câu hỏi từ LLM (cả 3.6, 3.1 và 2.5): {e3}")
+                return []
