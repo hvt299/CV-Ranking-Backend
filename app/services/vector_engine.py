@@ -3,6 +3,7 @@ import re
 import httpx
 import numpy as np
 from dotenv import load_dotenv
+from collections import Counter
 
 load_dotenv()
 COLAB_API_URL = os.getenv("COLAB_API_URL")
@@ -89,7 +90,7 @@ async def get_cv_embeddings(text: str) -> list:
             
     return valid_embeddings
 
-def calculate_cosine_similarity(cv_vectors: list, jd_vector: list) -> float:
+def calculate_dense_score(cv_vectors: list, jd_vector: list, top_k: int = 3) -> float:
     if not cv_vectors or not jd_vector:
         return 0.0
         
@@ -102,7 +103,7 @@ def calculate_cosine_similarity(cv_vectors: list, jd_vector: list) -> float:
     if norm_v2 == 0:
         return 0.0
     
-    max_score = 0.0
+    scores = []
     for vec in cv_vectors:
         v1 = np.array(vec).flatten()
         if len(v1) == 0 or len(v1) != len(v2):
@@ -113,9 +114,52 @@ def calculate_cosine_similarity(cv_vectors: list, jd_vector: list) -> float:
             continue
             
         similarity = np.dot(v1, v2) / (norm_v1 * norm_v2)
-        max_score = max(max_score, float(similarity) * 100)
+        scores.append(float(similarity) * 100)
     
-    return round(max_score, 2)
+    if not scores:
+        return 0.0
+        
+    scores.sort(reverse=True)
+    top_scores = scores[:top_k]
+    
+    return round(sum(top_scores) / len(top_scores), 2)
+
+def calculate_sparse_score(cv_text: str, jd_text: str) -> float:
+    if not cv_text or not jd_text: 
+        return 0.0
+        
+    cv_words = re.findall(r'\w+', cv_text.lower())
+    jd_words = re.findall(r'\w+', jd_text.lower())
+    
+    if not cv_words or not jd_words: 
+        return 0.0
+
+    cv_counts = Counter(cv_words)
+    jd_counts = Counter(jd_words)
+
+    k1 = 1.5
+    b = 0.75
+    avgdl = 400.0
+    dl = len(cv_words)
+
+    score = 0.0
+    max_score = 0.0
+
+    for word, q_freq in jd_counts.items():
+        max_num = q_freq * (k1 + 1)
+        max_den = q_freq + k1 * (1 - b + b * (dl / avgdl))
+        max_score += q_freq * (max_num / max_den)
+
+        if word in cv_counts:
+            tf = cv_counts[word]
+            num = tf * (k1 + 1)
+            den = tf + k1 * (1 - b + b * (dl / avgdl))
+            score += q_freq * (num / den)
+
+    if max_score == 0: 
+        return 0.0
+        
+    return min(100.0, (score / max_score) * 100)
 
 def get_top_contributing_sentences(cv_text: str, jd_text: str, top_k: int = 3) -> list:
     if not cv_text or not jd_text:

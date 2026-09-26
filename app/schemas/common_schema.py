@@ -64,6 +64,49 @@ class AuditAction(str, Enum):
     USER_ANONYMIZED = "user_anonymized"
     PASSWORD_RESET = "password_reset"
     LOGIN_FAILED = "login_failed"
+    PLAN_CREATED = "plan_created"
+    PLAN_UPDATED = "plan_updated"
+    PLAN_STATUS_TOGGLED = "plan_status_toggled"
+    SYSTEM_SETTINGS_UPDATED = "system_settings_updated"
+    SKILL_CREATED = "skill_created"
+    SKILL_UPDATED = "skill_updated"
+    SKILL_DELETED = "skill_deleted"
+    LOCATION_CREATED = "location_created"
+    LOCATION_UPDATED = "location_updated"
+    LOCATION_DELETED = "location_deleted"
+    JOB_SUSPENDED = "job_suspended"
+    USER_SUSPENDED = "user_suspended"
+    REPORT_RESOLVED = "report_resolved"
+    REPORT_REJECTED = "report_rejected"
+    TICKET_STATUS_UPDATED = "ticket_status_updated"
+    TICKET_REPLY_SENT = "ticket_reply_sent"
+    BLOG_CREATED = "blog_created"
+    BLOG_UPDATED = "blog_updated"
+    BLOG_DELETED = "blog_deleted"
+
+class ReportStatus(str, Enum):
+    PENDING = "pending"
+    RESOLVED = "resolved"
+    REJECTED = "rejected"
+
+class ReportTargetType(str, Enum):
+    JOB = "job"
+    COMPANY = "company"
+    USER = "user"
+    SYSTEM = "system"
+
+class TicketStatus(str, Enum):
+    OPEN = "open"
+    IN_PROGRESS = "in_progress"
+    WAITING_FOR_USER = "waiting_for_user"
+    RESOLVED = "resolved"
+    CLOSED = "closed"
+
+class TicketCategory(str, Enum):
+    TECH_BUG = "tech_bug"
+    BILLING = "billing"
+    KYC = "kyc"
+    OTHER = "other"
 
 class SubscriptionTier(str, Enum):
     FREE = "free"
@@ -79,7 +122,51 @@ class RecommendationEnum(str, Enum):
     HIRE = "hire"
     NO_HIRE = "no_hire"
     MAYBE = "maybe"
+    STRONG_HIRE = "strong_hire"
 
-class AlertFrequency(str, Enum):
-    DAILY = "daily"
-    WEEKLY = "weekly"
+class RemoteFlexibilityEnum(str, Enum):
+    REMOTE_ONLY = "remote_only"
+    HYBRID = "hybrid"
+    ONSITE_ONLY = "onsite_only"
+    ANY = "any"
+
+class InterviewStatus(str, Enum):
+    SCHEDULED = "scheduled"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    RESCHEDULED = "rescheduled"
+
+class NotificationActorType(str, Enum):
+    SYSTEM = "system"
+    ADMIN = "admin"
+    HR_USER = "hr_user"
+    APPLICANT = "applicant"
+
+class NotificationActionType(str, Enum):
+    KYC_REQUESTED = "kyc_requested"
+    KYC_APPROVED = "kyc_approved"
+    KYC_REJECTED = "kyc_rejected"
+    NEW_CV_RECEIVED = "new_cv_received"
+    INTERVIEW_SCHEDULED = "interview_scheduled"
+    APPLICATION_UPDATED = "application_updated"
+    GENERAL_ALERT = "general_alert"
+
+class CurrencyEnum(str, Enum):
+    VND = "VND"
+    USD = "USD"
+
+class DiscountType(str, Enum):
+    PERCENTAGE = "percentage"
+    FIXED_AMOUNT = "fixed_amount"
+
+class QuotaActionType(str, Enum):
+    AI_INTERVIEW_GEN = "AI_INTERVIEW_GEN"
+    REVERSE_MATCHING = "REVERSE_MATCHING"
+    HR_PARSE_CV = "HR_PARSE_CV"
+    HR_MAP_CV_AI_SCORE = "HR_MAP_CV_AI_SCORE"
+    HR_MAP_BATCH_CV_AI_SCORE = "HR_MAP_BATCH_CV_AI_SCORE"
+    EXPIRED_CREDIT_RECOVERY = "EXPIRED_CREDIT_RECOVERY"
+    APPLICANT_SELF_SCORE = "APPLICANT_SELF_SCORE"
+    UPGRADE_FREE = "UPGRADE_FREE"
+    UPGRADE_PRO = "UPGRADE_PRO"
+    UPGRADE_ENTERPRISE = "UPGRADE_ENTERPRISE"

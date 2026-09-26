@@ -11,6 +11,7 @@ class SkillMatchDetail(BaseModel):
         description="Kết quả Skill-Context Verification: skill nằm trong câu có ngữ cảnh (cao) hay chỉ trong list phẳng (thấp)"
     )
     years_experience: Optional[float] = None
+    is_knockout: bool = Field(default=False)
 
 class ScoreBreakdown(BaseModel):
     skills_score: float = 0
@@ -18,16 +19,11 @@ class ScoreBreakdown(BaseModel):
     education_score: float = 0
     nlp_score: float = 0
     penalty_score: float = 0
-    fraud_analysis: Optional[Dict] = Field(
-        default=None, 
-        description="Lưu kết quả quét gian lận từ document_forensics (risk_score, penalty, evidence)"
-    )
 
 class AIScore(BaseModel):
     total_score: float
     score_breakdown: ScoreBreakdown
     skill_details: List[SkillMatchDetail] = Field(default=[])
-    missing_required_skills: List[str] = Field(default=[])
     top_contributing_sentences: List[str] = Field(
         default=[],
         description="Các câu trong CV đóng góp điểm ngữ nghĩa cao nhất — phục vụ explainability"
@@ -35,9 +31,10 @@ class AIScore(BaseModel):
 
 class ApplicationCreate(BaseModel):
     job_id: str
-    cv_document_id: str = Field(
+    cv_id: str = Field(
         ...,
-        description="ID của CVDocument trong Library được chọn để nộp")
+        description="ID của CV gốc trong Document Center (CVRepository)"
+    )
     applicant_user_id: Optional[str] = Field(
         default=None,
         description="None nếu HR chủ động sourcing, có giá trị nếu ứng viên tự nộp"
@@ -47,9 +44,9 @@ class ApplicationCreate(BaseModel):
         ...,
         description="ID của công ty quản lý job và application này"
     )
-    cover_letter: Optional[str] = Field(
+    cover_letter_id: Optional[str] = Field(
         default=None,
-        description="Thư giới thiệu của ứng viên gửi kèm khi nộp"
+        description="ID của Thư giới thiệu (từ Thư viện Cover Letter)"
     )
 
 class InterviewSchedule(BaseModel):

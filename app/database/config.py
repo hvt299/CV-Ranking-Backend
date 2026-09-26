@@ -7,9 +7,12 @@ load_dotenv()
 
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017/cv-ranking")
 
+import redis.asyncio as aioredis
+
 class Database:
     client: AsyncIOMotorClient = None
     db = None
+    redis: aioredis.Redis = None
 
 db_instance = Database()
 
@@ -23,14 +26,26 @@ class Collections:
     AUDIT_LOGS = "audit_logs"
     DEPARTMENTS = "departments"
     SKILLS = "skills"
+    LANGUAGES = "languages"
+    CERTIFICATIONS = "certifications"
     ADMINISTRATIVE_UNITS = "administrative_units"
     REFRESH_TOKENS = "refresh_tokens"
     SUBSCRIPTION_PLANS = "subscription_plans"
+    PROMOTIONS = "promotions"
+    QUOTA_TRANSACTIONS = "quota_transactions"
+    SYSTEM_SETTINGS = "system_settings"
     APPLICANT_PROFILES = "applicant_profiles"
-    INTERVIEW_FEEDBACKS = "interview_feedbacks"
+    COVER_LETTERS = "cover_letters"
     COMPANY_REVIEWS = "company_reviews"
     SAVED_JOBS = "saved_jobs"
-    JOB_ALERTS = "job_alerts"
+    SAVED_COMPANIES = "saved_companies"
+    TALENT_POOLS = "talent_pools"
+    MATCHING_PREFERENCES = "matching_preferences"
+    INTERVIEWS = "interviews"
+    INTERVIEW_FEEDBACKS = "interview_feedbacks"
+    REPORTS = "reports"
+    SUPPORT_TICKETS = "support_tickets"
+    BLOG_POSTS = "blog_posts"
 
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "cv-ranking")
 
@@ -45,14 +60,22 @@ async def connect_to_mongo():
             name="ttl_90_days_audit_logs"
         )
         
-        print("Đã kết nối thành công với MongoDB và thiết lập TTL Index!")
+        REDIS_URL = os.getenv("REDIS_URL", "")
+        if REDIS_URL.startswith(("redis://", "rediss://", "unix://")):
+            db_instance.redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+            print("Da ket noi thanh cong voi MongoDB va Redis Cache!")
+        else:
+            db_instance.redis = None
+            print("Da ket noi MongoDB! (Bo qua Redis Cache do REDIS_URL dang dung RAM ao)")
     except Exception as e:
-        print(f"Lỗi kết nối MongoDB: {e}")
+        print(f"Loi ket noi DB/Redis: {e}")
 
 async def close_mongo_connection():
     if db_instance.client is not None:
         db_instance.client.close()
-        print("Đã ngắt kết nối MongoDB!")
+    if db_instance.redis is not None:
+        await db_instance.redis.close()
+    print("Da ngat ket noi DB & Redis!")
 
 def get_db():
     return db_instance.db

@@ -30,8 +30,19 @@ class NotificationRepository(BaseRepository):
     async def find_all(cls, query: dict = {}, limit: int = 100, include_deleted: bool = False) -> List[Dict[str, Any]]:
         db = get_db()
         query = cls._apply_soft_delete(query, include_deleted)
-        # Notification luôn ưu tiên tin mới
+        
         cursor = db[cls.collection_name].find(query).sort("created_at", -1)
         if limit:
             cursor = cursor.limit(limit)
-        return await cursor.to_list(length=limit)
+        docs = await cursor.to_list(length=limit)
+        return [cls._format_doc(doc) for doc in docs]
+
+    @classmethod
+    async def get_unread_count(cls, recipient_user_id: str) -> int:
+        from app.schemas.common_schema import NotificationReadStatus
+        db = get_db()
+        query = cls._apply_soft_delete({
+            "recipient_user_id": recipient_user_id, 
+            "status": NotificationReadStatus.UNREAD.value
+        }, include_deleted=False)
+        return await db[cls.collection_name].count_documents(query)

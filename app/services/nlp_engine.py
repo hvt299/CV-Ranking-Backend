@@ -3,6 +3,7 @@ import re
 from typing import Dict, List, Tuple
 import logging
 from datetime import datetime
+import math
 
 import pdfplumber
 import docx
@@ -10,19 +11,107 @@ import docx
 from fastapi import UploadFile, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
-from app.services.vector_engine import calculate_cosine_similarity
+from app.services.vector_engine import calculate_dense_score, calculate_sparse_score
 from app.services.llm_service import extract_cv_metrics_with_llm
 
 from app.repositories.skill_repository import SkillRepository
+from app.database.config import get_db, db_instance, Collections
+import json
+
+# ==========================================================
+# CẤU HÌNH ĐỘNG HỆ THỐNG (MEMORY CACHE)
+# ==========================================
+GLOBAL_SYSTEM_SETTINGS = {
+    "industry_weights": {},
+    "action_costs": {},
+    "payment_config": {}
+}
+
+DEFAULT_SYSTEM_SETTINGS = {
+    "industry_weights": {
+        "it": (0.50, 0.20, 0.25, 0.05, 0.35),
+        "electronics_telecom": (0.45, 0.20, 0.20, 0.15, 0.40),
+        "manufacturing": (0.40, 0.20, 0.30, 0.10, 0.45),
+        "construction": (0.40, 0.15, 0.30, 0.15, 0.45),
+        "energy_agriculture": (0.40, 0.15, 0.25, 0.20, 0.50),
+        "sales": (0.30, 0.35, 0.25, 0.10, 0.75),
+        "marketing": (0.35, 0.35, 0.20, 0.10, 0.70),
+        "customer_service": (0.25, 0.40, 0.25, 0.10, 0.75),
+        "retail_lifestyle": (0.25, 0.30, 0.35, 0.10, 0.65),
+        "logistics": (0.35, 0.20, 0.30, 0.15, 0.60),
+        "hr_admin_legal": (0.35, 0.30, 0.20, 0.15, 0.65),
+        "finance": (0.35, 0.20, 0.25, 0.20, 0.45),
+        "accounting": (0.40, 0.15, 0.25, 0.20, 0.40),
+        "healthcare": (0.35, 0.10, 0.25, 0.30, 0.30),
+        "education": (0.30, 0.20, 0.20, 0.30, 0.60),
+        "law": (0.30, 0.25, 0.20, 0.25, 0.40),
+        "labor": (0.30, 0.10, 0.50, 0.10, 0.50),
+        "driver": (0.40, 0.05, 0.45, 0.10, 0.50),
+        "design": (0.45, 0.25, 0.20, 0.10, 0.60),
+        "default": (0.40, 0.30, 0.20, 0.10, 0.50)
+    },
+    "action_costs": {
+        "REVERSE_MATCHING": 5,            # Săn ứng viên (Giảm giá để dễ Upsell)
+        "AI_INTERVIEW_GEN": 2,            # Sinh câu hỏi phỏng vấn
+        "HR_PARSE_CV": 0,                 # Upload CV (Chỉ trừ quota)
+        "HR_MAP_CV_AI_SCORE": 0,          # Chấm điểm 1 CV (Chỉ trừ quota)
+        "HR_MAP_BATCH_CV_AI_SCORE": 0,    # Chấm điểm loạt CV (Chỉ trừ quota)
+        "APPLICANT_SELF_SCORE": 0,        # Ứng viên tự chấm (Giới hạn bằng quota 3 lần/ngày)
+        "APPLICANT_AI_CV_REVIEW": 1       # Tính năng AI Gợi ý/Sửa lỗi CV
+    },
+    "payment_config": {
+        "bank_id": "MB",
+        "account_no": "0123456789",
+        "account_name": "CONG TY TNHH ATS SYSTEM",
+        "template": "compact2"
+    }
+}
+
+async def refresh_system_settings():
+    db = get_db()
+    redis = db_instance.redis
+    settings = None
+    
+    if redis:
+        try:
+            cached = await redis.get("system_settings")
+            if cached:
+                settings = json.loads(cached)
+        except Exception as e:
+            logging.error(f"Redis Cache Error: {e}")
+    
+    if not settings:
+        doc = await db[Collections.SYSTEM_SETTINGS].find_one({"setting_type": "global_config"})
+        if doc:
+            settings = {
+                "industry_weights": doc.get("industry_weights", {}),
+                "action_costs": doc.get("action_costs", {}),
+                "payment_config": doc.get("payment_config", {})
+            }
+        else:
+            logging.warning("WARNING: SYSTEM_SETTINGS trống. Tự động bơm cấu hình mặc định (Auto-Seed)!")
+            settings = DEFAULT_SYSTEM_SETTINGS
+            await db[Collections.SYSTEM_SETTINGS].insert_one({
+                "setting_type": "global_config",
+                "industry_weights": settings["industry_weights"],
+                "action_costs": settings["action_costs"],
+                "payment_config": settings["payment_config"]
+            })
+            
+        if redis:
+            await redis.set("system_settings", json.dumps(settings), ex=3600)
+                
+    GLOBAL_SYSTEM_SETTINGS["industry_weights"] = settings.get("industry_weights", {})
+    GLOBAL_SYSTEM_SETTINGS["action_costs"] = settings.get("action_costs", {})
+    GLOBAL_SYSTEM_SETTINGS["payment_config"] = settings.get("payment_config", {})
+    logging.info("Đã đồng bộ SYSTEM_SETTINGS từ Database/Redis vào Memory.")
 
 INDUSTRY_SKILL_MAP = {}
 
 async def initialize_skill_map():
-    """Hàm này sẽ được gọi ở lifespan trong main.py khi khởi động server"""
     global INDUSTRY_SKILL_MAP
     INDUSTRY_SKILL_MAP.clear()
 
-    # Lấy toàn bộ skill từ DB (limit=0 để không bị giới hạn) - Dùng thẳng ClassMethod
     skills = await SkillRepository.find_many(limit=0)
 
     merged_map = {}
@@ -36,7 +125,6 @@ async def initialize_skill_map():
             
         merged_map[ind][main] = list(set([main] + [a.lower() for a in aliases]))
         
-    # Xây dựng bộ từ điển tổng hợp (fallback)
     all_skills = {}
     for ind, skill_dict in merged_map.items():
         for main, variants in skill_dict.items():
@@ -131,12 +219,12 @@ def extract_social_links(text: str) -> dict:
         if 'topcv.vn' in url or len(url) < 8:
             continue
 
-        if 'github.com' in url or 'gitlab.com' in url:
-            if not links['github']:
-                links['github'] = url
-        elif 'linkedin.com' in url:
+        if 'linkedin.com' in url:
             if not links['linkedin']:
                 links['linkedin'] = url
+        elif 'github.com' in url:
+            if not links['github']:
+                links['github'] = url
         else:
             if url not in links['portfolio']:
                 links['portfolio'].append(url)
@@ -236,27 +324,60 @@ async def analyze_cv_text(text: str) -> Dict:
     social_links = extract_social_links(text)
 
     llm_metrics = await extract_cv_metrics_with_llm(text)
-
-    final_yoe = llm_metrics.get("years_of_experience")
-    if final_yoe == 0.0 and yoe_regex > 0.0:
+    
+    # KẾ HOẠCH B: Nếu LLM sập (is_fallback = True), tin tưởng hoàn toàn vào Regex
+    is_fallback = llm_metrics.get("is_fallback", False)
+    
+    if is_fallback:
         final_yoe = yoe_regex
-
-    final_edu = llm_metrics.get("education_level", "Không đề cập")
-    if final_edu == "Không đề cập" and edu_level_regex != "Không đề cập":
         final_edu = edu_level_regex
+        final_job_hops = 1
+        final_gap_months = 0
+        candidate_name = None
+        current_job_title = None
+        languages = []
+        certifications = []
+    else:
+        final_yoe = llm_metrics.get("years_of_experience", 0.0)
+        if final_yoe == 0.0 and yoe_regex > 0.0:
+            final_yoe = yoe_regex
+            
+        final_edu = llm_metrics.get("education_level", "Không đề cập")
+        if final_edu == "Không đề cập" and edu_level_regex != "Không đề cập":
+            final_edu = edu_level_regex
+            
+        final_job_hops = llm_metrics.get("job_hops", 1)
+        final_gap_months = llm_metrics.get("gap_months", 0)
+        
+        candidate_name = llm_metrics.get("candidate_name")
+        current_job_title = llm_metrics.get("current_job_title")
+        languages = llm_metrics.get("languages", [])
+        certifications = llm_metrics.get("certifications", [])
+        
+        llm_skills = llm_metrics.get("skills", [])
+        for sk in llm_skills:
+            s_name = sk.get("name", "").lower()
+            s_years = sk.get("years", 0.0)
+            if s_name and s_years > 0:
+                norm_name = get_normalized_skill(s_name)
+                skill_experience[norm_name] = max(skill_experience.get(norm_name, 0.0), s_years)
 
     return {
         **info,
+        "candidate_name": candidate_name,
+        "current_job_title": current_job_title,
+        "languages": languages,
+        "certifications": certifications,
         "skills": skills,
         "skill_count": len(skills),
         "years_of_experience": final_yoe,
         "skill_experience": skill_experience,
         "education_level": final_edu,
-        "job_hops": llm_metrics.get("job_hops", 1),
-        "gap_months": llm_metrics.get("gap_months", 0),
-        "github": social_links["github"],
-        "linkedin": social_links["linkedin"],
-        "portfolio": social_links["portfolio"]
+        "job_hops": final_job_hops,
+        "gap_months": final_gap_months,
+        "github": social_links.get("github"),
+        "linkedin": social_links.get("linkedin"),
+        "portfolio": social_links.get("portfolio", [])
     }
 
 def get_normalized_skill(raw_skill: str, industry: str = "all") -> str:
@@ -353,7 +474,8 @@ def calculate_skill_score(cv_skills: set, cv_skill_exp: dict, cv_yoe: float, jd_
     for req in jd_required:
         earned, raw_name, is_matched, conf, y_exp = evaluate_skill(req, 1.0)
         skill_details.append({
-            "skill": raw_name, "matched": is_matched, "confidence": conf, "years_experience": y_exp
+            "skill": raw_name, "matched": is_matched, "confidence": conf, "years_experience": y_exp,
+            "is_knockout": req.get("is_knockout", False)
         })
         if is_matched:
             score += earned
@@ -364,7 +486,8 @@ def calculate_skill_score(cv_skills: set, cv_skill_exp: dict, cv_yoe: float, jd_
     for pref in jd_preferred:
         earned, raw_name, is_matched, conf, y_exp = evaluate_skill(pref, 0.5)
         skill_details.append({
-            "skill": raw_name, "matched": is_matched, "confidence": conf, "years_experience": y_exp
+            "skill": raw_name, "matched": is_matched, "confidence": conf, "years_experience": y_exp,
+            "is_knockout": pref.get("is_knockout", False)
         })
         if is_matched:
             score += earned
@@ -398,6 +521,27 @@ def calculate_education_score(cv_edu: str, jd_min_edu: str) -> float:
         return 100.0
     return round((cv_rank / jd_rank) * 100, 2)
 
+def calculate_gap_penalty(gap_months: int) -> float:
+    if gap_months <= 3:
+        return 0.0
+    p_max = 25.0
+    x_0 = 12.0
+    k = 0.4
+    return p_max / (1 + math.exp(-k * (gap_months - x_0)))
+
+def calculate_hop_penalty(cv_yoe: float, job_hops: int) -> float:
+    if cv_yoe == 0:
+        return 0.0
+    
+    tenure = cv_yoe / max(job_hops, 1)
+    if tenure >= 1.2:
+        return 0.0
+        
+    p_max = 20.0
+    x_0 = 0.8
+    k = -5.0
+    return p_max / (1 + math.exp(-k * (tenure - x_0)))
+
 def score_cv(cv_data: dict, jd_data: dict) -> dict:
     industry = jd_data.get("industry") or "all"
     
@@ -430,50 +574,121 @@ def score_cv(cv_data: dict, jd_data: dict) -> dict:
     )
     experience_score = calculate_experience_score(cv_yoe, jd_min_yoe)
     education_score = calculate_education_score(cv_edu, jd_min_edu)
-    nlp_score = calculate_cosine_similarity(cv_vector, jd_vector)
-
-    score_weights = jd_data.get("score_weights") or {}
-    WEIGHT_SKILL = score_weights.get("skills_weight", 0.40)
-    WEIGHT_NLP = score_weights.get("nlp_weight", 0.30)
-    WEIGHT_EXP = score_weights.get("experience_weight", 0.20)
-    WEIGHT_EDU = score_weights.get("education_weight", 0.10)
-
-    total_score = (skill_score * WEIGHT_SKILL) + (experience_score * WEIGHT_EXP) + (education_score * WEIGHT_EDU) + (nlp_score * WEIGHT_NLP)
-    total_score = min(100.0, total_score)
+    
+    # ==========================================
+    # UX BADGES & SCORE CLAMPING
+    # ==========================================
+    ux_badges = []
+    
+    if experience_score > 100.0:
+        ux_badges.append({"type": "EXPERIENCE", "label": "Vượt kỳ vọng kinh nghiệm", "color": "purple"})
+    if skill_score > 100.0:
+        ux_badges.append({"type": "SKILL", "label": "Kỹ năng chuyên sâu", "color": "blue"})
+        
+    experience_score = min(100.0, experience_score)
+    skill_score = min(100.0, skill_score)
+    education_score = min(100.0, education_score)
 
     # ==========================================
-    # CÁC LOGIC PENALTY MỚI (ANTI-STUFFING)
+    # XỬ LÝ TRỌNG SỐ & ALPHA MATRIX (STRICT DYNAMIC SETTINGS)
+    # ==========================================
+    industry_code = industry.lower()
+    industry_weights = GLOBAL_SYSTEM_SETTINGS.get("industry_weights", {})
+    
+    matrix = industry_weights.get(industry_code) or industry_weights.get("default")
+    if not matrix:
+        raise ValueError("Hệ thống chưa được cấu hình trọng số AI (Industry Weights) trong Database. Không thể tính điểm.")
+        
+    WEIGHT_SKILL, WEIGHT_NLP, WEIGHT_EXP, WEIGHT_EDU, DEFAULT_ALPHA = matrix
+
+    score_weights = jd_data.get("score_weights")
+    if score_weights and isinstance(score_weights, dict) and "skills_weight" in score_weights:
+        WEIGHT_SKILL = score_weights["skills_weight"]
+        WEIGHT_NLP = score_weights["nlp_weight"]
+        WEIGHT_EXP = score_weights["experience_weight"]
+        WEIGHT_EDU = score_weights["education_weight"]
+    
+    # ==========================================
+    # HYBRID FUSION (BM25 + BGE-M3)
+    # ==========================================
+    jd_search_text = jd_data.get("jd_search_text", "")
+    dense_score = calculate_dense_score(cv_vector, jd_vector, top_k=3)
+    sparse_score = calculate_sparse_score(cv_raw_text, jd_search_text)
+    
+    nlp_score = (DEFAULT_ALPHA * dense_score) + ((1.0 - DEFAULT_ALPHA) * sparse_score)
+    nlp_score = min(100.0, nlp_score)
+
+    total_score = (skill_score * WEIGHT_SKILL) + (experience_score * WEIGHT_EXP) + (education_score * WEIGHT_EDU) + (nlp_score * WEIGHT_NLP)
+
+    # ==========================================
+    # LOGIC PENALTY MỚI (SIGMOID CURVE)
     # ==========================================
     penalty_score = 0.0
     fraud_analysis = cv_data.get("fraud_analysis") or {}
     if fraud_analysis.get("detected", False):
         penalty_score += fraud_analysis.get("penalty", 30.0)
+        ux_badges.append({"type": "WARNING", "label": "Cảnh báo nội dung", "color": "red"})
 
     job_hops = cv_data.get("job_hops", 1)
     gap_months = cv_data.get("gap_months", 0)
     
-    if cv_yoe > 0:
-        avg_tenure = cv_yoe / max(job_hops, 1)
-        if avg_tenure < 0.8:
-            penalty_score += 15.0
-            
-    if gap_months > 12:
-        penalty_score += 10.0
-        
+    penalty_score += calculate_hop_penalty(cv_yoe, job_hops)
+    penalty_score += calculate_gap_penalty(gap_months)
+    
+    # ==========================================
+    # KNOCK-OUT ENGINE
+    # ==========================================
+    missing_knockouts = []
+
+    for req in jd_required_skills:
+        if isinstance(req, dict) and req.get("is_knockout") and req.get("name") in missing_required_skills:
+            missing_knockouts.append(req.get("name"))
+
+    cv_langs_text = " ".join(cv_data.get("languages", [])).lower()
+    for lang in jd_data.get("languages", []):
+        if isinstance(lang, dict) and lang.get("is_knockout"):
+            lang_name = lang.get("name", "").lower()
+            if lang_name not in cv_langs_text:
+                missing_knockouts.append(lang.get("name"))
+
+    cv_certs_text = " ".join(cv_data.get("certifications", [])).lower()
+    for cert in jd_data.get("required_certifications", []):
+        if isinstance(cert, dict) and cert.get("is_knockout"):
+            cert_name = cert.get("name", "").lower()
+            if cert_name not in cv_certs_text:
+                missing_knockouts.append(cert.get("name"))
+
+    if missing_knockouts:
+        penalty_score += 25.0
+        ux_badges.append({"type": "KNOCKOUT", "label": f"Thiếu yêu cầu cứng: {', '.join(missing_knockouts[:2])}", "color": "red"})
+
     total_score = max(0.0, total_score - penalty_score)
+    total_score_rounded = round(total_score, 2)
+    
+    # ==========================================
+    # ENTERPRISE TIER TRANSLATION
+    # ==========================================
+    if total_score_rounded >= 90:
+        match_tier = "TOP_MATCH"
+    elif total_score_rounded >= 75:
+        match_tier = "STRONG_MATCH"
+    elif total_score_rounded >= 60:
+        match_tier = "POTENTIAL_MATCH"
+    else:
+        match_tier = "NOT_RECOMMENDED"
 
     return {
-        "total_score": round(total_score, 2),
+        "total_score": total_score_rounded,
+        "match_tier": match_tier,
+        "badges": ux_badges,
         "score_breakdown": {
             "skills_score": round(skill_score, 2),
             "experience_score": round(experience_score, 2),
             "education_score": round(education_score, 2),
             "nlp_score": round(nlp_score, 2),
             "penalty_score": round(penalty_score, 2),
-            "fraud_analysis": fraud_analysis
         },
         "skill_details": skill_details,
-        "missing_required_skills": missing_required_skills,
         "top_contributing_sentences": cv_data.get("top_sentences", []),
         "matched_skills": matched_skills_names 
     }

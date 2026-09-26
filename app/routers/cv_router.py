@@ -1,24 +1,30 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Body, Request, Response, BackgroundTasks
 from bson import ObjectId
 from datetime import datetime, timezone
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Optional
 
 from app.database.config import Collections
 from app.schemas.application_schema import ApplicationUpdate
-from app.schemas.common_schema import ApplicationStatus, ApplicationSource, NotificationType, NotificationReadStatus, AuditAction
+from app.schemas.common_schema import ApplicationStatus, ApplicationSource, NotificationType, NotificationReadStatus, AuditAction, NotificationActorType, NotificationActionType
+from app.schemas.user_interaction_schema import TalentPoolCreate
 from app.repositories.job_repository import JobRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.cv_repository import CVRepository
 from app.repositories.notification_repository import NotificationRepository
+from app.repositories.user_interactions_repository import TalentPoolRepository
+from app.repositories.applicant_profile_repository import ApplicantProfileRepository
+from app.repositories.quota_transaction_repository import QuotaTransactionRepository
+from app.repositories.cover_letter_repository import CoverLetterRepository
 
-from app.services.nlp_engine import extract_text, analyze_cv_text, score_cv
-from app.services.vector_engine import compress_cv_data, get_cv_embeddings, get_top_contributing_sentences
-from app.services.document_forensics import detect_hidden_text
+from app.services.ai_scoring_service import AIScoringService
 from app.services.audit_service import log_action
-from app.core.security import require_hr, require_hr_or_admin, get_scope_filter, CurrentUser
+from app.services.vector_engine import compress_jd_data, get_embedding
+from app.services.nlp_engine import GLOBAL_SYSTEM_SETTINGS
+from app.core.security import ensure_job_manager, require_hr, require_hr_or_admin, get_scope_filter, CurrentUser
 from app.middleware.rate_limit import limiter
-from app.middleware.subscription import verify_cv_quota
+from app.middleware.subscription import require_tier, require_credits
 from app.services.storage_service import upload_file_to_cloudinary, delete_file_from_cloudinary
 from app.services.email_service import send_interview_email
 from app.services.llm_service import generate_interview_questions
@@ -29,10 +35,30 @@ MAX_FILE_SIZE = 5 * 1024 * 1024
 
 class MapCVRequest(BaseModel):
     job_id: str
+    cover_letter_id: Optional[str] = Field(default=None, description="ID của Thư giới thiệu (nếu HR có đính kèm thêm)")
 
 class MapBatchCVRequest(BaseModel):
     cv_ids: list[str]
     job_id: str
+
+class SalaryFilter(BaseModel):
+    min_salary: Optional[int] = None
+    max_salary: Optional[int] = None
+
+class LocationFilter(BaseModel):
+    province_code: Optional[str] = None
+    district_code: Optional[str] = None
+
+class DiscoveryRequest(BaseModel):
+    title: str = Field(..., description="Vị trí cần tìm (VD: Senior Backend Dev)")
+    industry: str = Field(default="it")
+    required_skills: list[dict] = Field(..., description="Danh sách kỹ năng cần thiết")
+    min_yoe: float = Field(default=0.0)
+    salary: SalaryFilter = Field(default_factory=SalaryFilter, description="Bộ lọc lương an toàn")
+    location: LocationFilter = Field(default_factory=LocationFilter, description="Bộ lọc địa điểm an toàn")
+    work_mode: str = Field(default="Office")
+    employment_type: str = Field(default="Full-time")
+    description: str = Field(..., description="Mô tả công việc (Dùng để so khớp ngữ nghĩa Vector)")
 
 def get_notification_content(status: str, job_title: str):
     status_map = {
@@ -52,7 +78,7 @@ async def upload_cv_to_pool(
     request: Request,
     response: Response,
     file: UploadFile = File(..., description="File CV định dạng PDF hoặc DOCX"),
-    current_user: CurrentUser = Depends(verify_cv_quota)
+    current_user: CurrentUser = Depends(require_credits(action_type="HR_PARSE_CV"))
 ):
     content = await file.read()
     
@@ -60,18 +86,13 @@ async def upload_cv_to_pool(
         raise HTTPException(status_code=400, detail="Dung lượng file vượt quá 5MB giới hạn")
     
     try:
-        raw_text = await extract_text(file, content)
+        raw_text, cv_data, fraud_result, cv_vector = await AIScoringService.process_uploaded_cv(file, content, file.filename)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Hệ thống không thể đọc được file này: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Hệ thống không thể xử lý file này: {str(e)}")
         
     if not raw_text.strip():
         raise HTTPException(status_code=400, detail="Không thể trích xuất văn bản.")
 
-    fraud_result = None
-    if file.filename.lower().endswith((".pdf", ".docx")):
-        fraud_result = detect_hidden_text(content, file.filename)
-
-    cv_data = await analyze_cv_text(raw_text)
     candidate_email = cv_data.get("email")
     
     if candidate_email:
@@ -79,15 +100,12 @@ async def upload_cv_to_pool(
         if existing_cv:
             return {
                 "message": "CV đã tồn tại trong Kho hồ sơ của công ty",
-                "cv_id": str(existing_cv["_id"]),
+                "cv_id": str(existing_cv.get("id")),
                 "candidate_email": candidate_email,
                 "is_existing": True
             }
         
     file_url = await upload_file_to_cloudinary(content, file.filename)
-        
-    compressed_text = compress_cv_data(raw_text, cv_data, cv_data.get("skills", []))
-    cv_vector = await get_cv_embeddings(compressed_text)
     
     pool_record = {
         "filename": file.filename,
@@ -95,6 +113,7 @@ async def upload_cv_to_pool(
         "raw_text": raw_text,
         "cv_vector_ref": cv_vector,
         "candidate_info": {
+            "full_name": cv_data.get("candidate_name"),
             "email": cv_data.get("email"),
             "phone": cv_data.get("phone"),
             "github": cv_data.get("github"),
@@ -103,6 +122,10 @@ async def upload_cv_to_pool(
             "skill_experience": cv_data.get("skill_experience", {}),
             "education_level": cv_data.get("education_level", "Không đề cập"),
             "years_of_experience": cv_data.get("years_of_experience", 0),
+            "languages": cv_data.get("languages", []),
+            "certifications": cv_data.get("certifications", []),
+            "job_hops": cv_data.get("job_hops", 1),
+            "gap_months": cv_data.get("gap_months", 0),
             "fraud_analysis": fraud_result
         },
         "extracted_skills": cv_data.get("skills", []),
@@ -125,7 +148,8 @@ async def map_cv_to_job(
     cv_id: str,
     payload: MapCVRequest,
     current_user: CurrentUser = Depends(require_hr),
-    scope_filter: dict = Depends(get_scope_filter)
+    scope_filter: dict = Depends(get_scope_filter),
+    _ = Depends(require_credits(action_type="HR_MAP_CV_AI_SCORE"))
 ):
     job_id = payload.job_id
     
@@ -162,25 +186,8 @@ async def map_cv_to_job(
         raise HTTPException(status_code=400, detail="Hồ sơ này đã được đưa vào chiến dịch này rồi!")
 
     jd_search_text = jd_data.get("jd_search_text", "")
-    raw_text = cv_record.get("raw_text", "")
-
-    top_sentences = get_top_contributing_sentences(raw_text, jd_search_text)
-
-    cv_data_for_scoring = {
-        "raw_text": cv_record.get("raw_text", ""),
-        "word_count": len((cv_record.get("raw_text", "") or "").split()),
-        "skills": cv_record.get("extracted_skills", []),
-        "years_of_experience": cv_record.get("candidate_info", {}).get("years_of_experience", 0),
-        "skill_experience": cv_record.get("candidate_info", {}).get("skill_experience", {}),
-        "education_level": cv_record.get("candidate_info", {}).get("education_level", "Không đề cập"),
-        "job_hops": cv_record.get("candidate_info", {}).get("job_hops", 1),       
-        "gap_months": cv_record.get("candidate_info", {}).get("gap_months", 0),   
-        "cv_vector": cv_record.get("cv_vector_ref", []),
-        "fraud_analysis": cv_record.get("candidate_info", {}).get("fraud_analysis", {}),
-        "top_sentences": top_sentences
-    }
-
-    scoring_result = score_cv(cv_data_for_scoring, jd_data)
+    
+    scoring_result, top_sentences = AIScoringService.prepare_and_score_cv(cv_record, jd_data, jd_search_text)
 
     cv_snapshot = {
         "cv_document_id": cv_id,
@@ -198,9 +205,9 @@ async def map_cv_to_job(
         "source": ApplicationSource.HR_SOURCED.value,
         "status": ApplicationStatus.NEW.value,
         "ai_score": scoring_result,
-        "applied_at": datetime.now(timezone.utc)
+        "applied_at": datetime.now(timezone.utc),
+        "cover_letter_id": payload.cover_letter_id
     }
-
     app_id = await ApplicationRepository.create(application_record)
 
     return {
@@ -220,6 +227,31 @@ async def map_multiple_cvs_to_job(
 
     if not cv_ids:
          raise HTTPException(status_code=400, detail="Danh sách CV không được để trống")
+
+    if len(cv_ids) > 50:
+         raise HTTPException(status_code=400, detail="Chỉ được phép xử lý tối đa 50 CV trong một lần để đảm bảo hiệu suất.")
+         
+    unit_cost = GLOBAL_SYSTEM_SETTINGS.get("action_costs", {}).get("HR_MAP_BATCH_CV_AI_SCORE")
+    if unit_cost is None:
+        raise HTTPException(status_code=503, detail="Hệ thống chưa cấu hình giá cho tính năng chấm điểm hàng loạt.")
+        
+    cost = len(cv_ids) * unit_cost
+    success = await CompanyRepository.deduct_ai_credits(current_user.company_id, cost)
+    if not success:
+        raise HTTPException(
+            status_code=402, 
+            detail=f"Tài khoản không đủ Credit AI. Cần {cost} credits để chấm điểm {len(cv_ids)} CV."
+        )
+        
+    company = await CompanyRepository.get_by_id(current_user.company_id)
+    await QuotaTransactionRepository.create({
+        "company_id": current_user.company_id,
+        "user_id": current_user.id,
+        "action_type": "HR_MAP_BATCH_CV_AI_SCORE",
+        "credit_cost": cost,
+        "balance_after": company.get("credits_remaining", 0),
+        "created_at": datetime.now(timezone.utc)
+    })
 
     try:
         jd_data = await JobRepository.find_one({"_id": ObjectId(job_id), **scope_filter})
@@ -259,24 +291,9 @@ async def map_multiple_cvs_to_job(
                 errors.append(f"CV {cv_record.get('filename')} đã tồn tại trong chiến dịch này")
                 continue
 
-            raw_text = cv_record.get("raw_text", "")
-            top_sentences = get_top_contributing_sentences(raw_text, jd_search_text)
-
-            cv_data_for_scoring = {
-                "raw_text": raw_text,
-                "word_count": len(raw_text.split()),
-                "skills": cv_record.get("extracted_skills", []),
-                "years_of_experience": cv_record.get("candidate_info", {}).get("years_of_experience", 0),
-                "skill_experience": cv_record.get("candidate_info", {}).get("skill_experience", {}),
-                "education_level": cv_record.get("candidate_info", {}).get("education_level", "Không đề cập"),
-                "job_hops": cv_record.get("candidate_info", {}).get("job_hops", 1),       
-                "gap_months": cv_record.get("candidate_info", {}).get("gap_months", 0),   
-                "cv_vector": cv_record.get("cv_vector_ref", []),
-                "fraud_analysis": cv_record.get("candidate_info", {}).get("fraud_analysis", {}),
-                "top_sentences": top_sentences
-            }
-
-            scoring_result = score_cv(cv_data_for_scoring, jd_data)
+            jd_search_text = jd_data.get("jd_search_text", "")
+            
+            scoring_result, top_sentences = AIScoringService.prepare_and_score_cv(cv_record, jd_data, jd_search_text)
 
             cv_snapshot = {
                 "cv_document_id": cv_id,
@@ -322,6 +339,8 @@ async def update_application_status(
         current_app = await ApplicationRepository.find_one(filter_query)
         if not current_app:
             raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển này")
+            
+        await ensure_job_manager(current_app.get("job_id"), current_user)
 
         update_query = {"$set": {}, "$push": {}}
 
@@ -385,13 +404,20 @@ async def update_application_status(
                 
                 notification = {
                     "recipient_user_id": applicant_user_id,
-                    "application_id": str(current_app["_id"]),
+                    "recipient_type": NotificationActorType.APPLICANT.value,
+                    "sender_id": current_user.id,
+                    "sender_type": NotificationActorType.HR_USER.value,
+                    "action_type": NotificationActionType.APPLICATION_UPDATED.value,
                     "title": title,
                     "message": message,
                     "type": notif_type,
+                    "entity_ref": {"type": "application", "id": str(current_app.get("id"))},
+                    "payload": {
+                        "job_title": job.get("title", "Vị trí tuyển dụng") if job else "Vị trí tuyển dụng",
+                        "status": update_data.status.value
+                    },
+                    "action_url": "/applicant/my-applications",
                     "status": NotificationReadStatus.UNREAD.value,
-                    "job_title_snapshot": job.get("title") if job else None,
-                    "application_status_snapshot": update_data.status.value,
                     "created_at": datetime.now(timezone.utc)
                 }
 
@@ -430,16 +456,57 @@ async def delete_cv_from_pool(cv_id: str, scope_filter: dict = Depends(get_scope
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/cover-letters/upload")
+@limiter.limit("50/day")
+async def upload_cover_letter_for_candidate(
+    request: Request,
+    response: Response,
+    file: UploadFile = File(...),
+    current_user: CurrentUser = Depends(require_hr)
+):
+    """
+    API dành cho HR tải lên Thư giới thiệu (nhận từ nguồn ngoài) để đính kèm vào Application.
+    Không cần lưu vào Thư viện của HR, chỉ tạo bản ghi lấy ID.
+    """
+    content = await file.read()
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="Dung lượng file vượt quá 5MB.")
+        
+    file_url = await upload_file_to_cloudinary(content, file.filename)
+    
+    cl_doc = {
+        "display_name": f"Thư giới thiệu tải lên bởi HR - {file.filename}",
+        "filename": file.filename,
+        "file_url": file_url,
+        "owner_user_id": None,
+        "company_id": current_user.company_id,
+        "created_at": datetime.now(timezone.utc)
+    }
+    
+    cl_id = await CoverLetterRepository.create(cl_doc)
+    return {
+        "status": "success",
+        "cover_letter_id": str(cl_id),
+        "file_url": file_url,
+        "filename": file.filename
+    }
+
 @router.get("/pool", dependencies=[Depends(require_hr_or_admin)])
 async def get_talent_pool(scope_filter: dict = Depends(get_scope_filter)):
     try:
         cvs = await CVRepository.find_all(scope_filter, projection={"raw_text": 0, "cv_vector_ref": 0}, limit=500)
-        
+        result = []
         for cv in cvs:
-            cv["id"] = str(cv["_id"])
-            del cv["_id"]
-                
-        return cvs
+            # Chuyển đổi ObjectId thành String
+            cv["id"] = cv.get("id") or str(cv.pop("_id", ""))
+            
+            # Đảm bảo các trường tham chiếu khác (nếu đang ở dạng ObjectId) cũng được chuyển thành String
+            for key, value in cv.items():
+                if isinstance(value, ObjectId):
+                    cv[key] = str(value)
+                    
+            result.append(cv)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -482,8 +549,7 @@ async def get_recent_applications(scope_filter: dict = Depends(get_scope_filter)
         
         result = []
         for app in applications:
-            app["id"] = str(app["_id"])
-            del app["_id"]
+            app["id"] = app.get("id") or str(app.pop("_id", ""))
             
             cv_snap = app.get("cv_snapshot", {})
             app["filename"] = cv_snap.get("filename", "CV Ẩn")
@@ -509,6 +575,7 @@ class ViewToggleRequest(BaseModel):
 async def toggle_application_viewed(
     app_id: str, 
     payload: ViewToggleRequest = Body(...),
+    current_user: CurrentUser = Depends(require_hr_or_admin),
     scope_filter: dict = Depends(get_scope_filter)
 ):
     set_data = {"is_viewed": payload.is_viewed, "updated_at": datetime.now(timezone.utc)}
@@ -519,16 +586,29 @@ async def toggle_application_viewed(
         {"_id": ObjectId(app_id), **scope_filter},
         {"$set": set_data}
     )
+    
+    current_app = await ApplicationRepository.get_by_id(app_id)
+    if current_app:
+        await ensure_job_manager(current_app.get("job_id"), current_user)
+        
     if modified == 0:
         raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển")
     return {"status": "success", "is_viewed": payload.is_viewed}
 
 @router.get("/applications/{app_id}/ai-interview", dependencies=[Depends(require_hr_or_admin)])
-async def get_ai_interview_questions(app_id: str, scope_filter: dict = Depends(get_scope_filter)):
+async def get_ai_interview_questions(
+    app_id: str, 
+    current_user: CurrentUser = Depends(require_hr_or_admin),
+    scope_filter: dict = Depends(get_scope_filter),
+    # LƯU Ý: CẤM XÓA VĨNH VIỄN ĐOẠN NÀY
+    _ = Depends(require_credits(action_type="AI_INTERVIEW_GEN"))
+):
     filter_query = {"_id": ObjectId(app_id), **scope_filter}
     app_record = await ApplicationRepository.find_one(filter_query)
     if not app_record:
         raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ ứng tuyển này")
+        
+    await ensure_job_manager(app_record.get("job_id"), current_user)
 
     existing_questions = app_record.get("ai_interview_questions")
     if existing_questions:
@@ -554,3 +634,116 @@ async def get_ai_interview_questions(app_id: str, scope_filter: dict = Depends(g
     await ApplicationRepository.update_by_query(filter_query, {"$set": {"ai_interview_questions": questions, "updated_at": datetime.now(timezone.utc)}})
 
     return {"status": "success", "data": questions}
+
+@router.post("/talent-pool/bookmark")
+async def bookmark_candidate_to_pool(
+    payload: TalentPoolCreate,
+    current_user: CurrentUser = Depends(require_hr)
+):
+    existing = await TalentPoolRepository.find_one({
+        "applicant_user_id": payload.applicant_user_id,
+        "company_id": current_user.company_id
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="Ứng viên này đã có trong Talent Pool của công ty")
+
+    record = payload.model_dump()
+    record.update({
+        "hr_user_id": current_user.id,
+        "company_id": current_user.company_id,
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc)
+    })
+    
+    _id = await TalentPoolRepository.create(record)
+    return {"status": "success", "message": "Đã lưu ứng viên vào Talent Pool", "id": _id}
+
+@router.delete("/talent-pool/bookmark/{applicant_user_id}", dependencies=[Depends(require_hr)])
+async def remove_candidate_from_pool(
+    applicant_user_id: str,
+    current_user: CurrentUser = Depends(require_hr)
+):
+    deleted_count = await TalentPoolRepository.delete_many({
+        "applicant_user_id": applicant_user_id,
+        "company_id": current_user.company_id
+    })
+    if deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Không tìm thấy ứng viên trong Talent Pool")
+    return {"status": "success", "message": "Đã bỏ lưu ứng viên khỏi Talent Pool"}
+
+@router.get("/talent-pool/bookmarked", dependencies=[Depends(require_hr)])
+async def get_bookmarked_candidates(current_user: CurrentUser = Depends(require_hr)):
+    records = await TalentPoolRepository.get_by_company_id(current_user.company_id)
+    return records
+
+@router.post("/talent-pool/discover", dependencies=[Depends(require_hr)])
+@limiter.limit("20/day")
+async def discover_talents(
+    request: Request,
+    response: Response,
+    payload: DiscoveryRequest,
+    current_user: CurrentUser = Depends(require_tier("can_use_reverse_matching")),
+    _ = Depends(require_credits(action_type="REVERSE_MATCHING"))
+):
+    job_data = payload.model_dump(exclude_none=True, exclude_unset=True)
+    
+    compressed_jd = compress_jd_data(job_data)
+    jd_vector = await get_embedding(compressed_jd)
+    
+    jd_search_text = f"{payload.title} {payload.description}".lower()
+    
+    job_data.update({
+        "jd_search_text": jd_search_text,
+        "jd_vector_ref": jd_vector
+    })
+
+    candidates = await ApplicantProfileRepository.find_candidates_for_job(job_data, limit=50)
+    
+    if not candidates:
+        return {"status": "success", "message": "Không có ứng viên nào phù hợp với mức lương/địa điểm này.", "leaderboard": []}
+
+    leaderboard = []
+    
+    for candidate in candidates:
+        cv_data_raw = candidate.get("cv_data")
+        if not cv_data_raw:
+            continue
+            
+        cv_id = str(cv_data_raw.get("id"))
+            
+        cv_record_for_scoring = {
+            "raw_text": cv_data_raw.get("raw_text", ""),
+            "cv_vector_ref": cv_data_raw.get("cv_vector_ref", []),
+            "candidate_info": cv_data_raw.get("candidate_info", {}),
+            "extracted_skills": cv_data_raw.get("extracted_skills", []),
+        }
+        
+        scoring_result, _ = AIScoringService.prepare_and_score_cv(
+            cv_record=cv_record_for_scoring, 
+            jd_data=job_data, 
+            jd_search_text=jd_search_text
+        )
+        
+        if scoring_result.get("total_score", 0) >= 50:
+            candidate_info = cv_data_raw.get("candidate_info", {})
+            
+            leaderboard.append({
+                "applicant_user_id": str(candidate["user_id"]),
+                "cv_document_id": cv_id,
+                "headline": candidate.get("headline", "Ứng viên Tiềm năng"),
+                "expected_salary": f"{candidate.get('expected_salary_min')} - {candidate.get('expected_salary_max')}",
+                "total_score": scoring_result.get("total_score"),
+                "match_tier": scoring_result.get("match_tier"),
+                "badges": scoring_result.get("badges", []),
+                "skills_score": scoring_result.get("score_breakdown", {}).get("skills_score"),
+                "matched_skills": scoring_result.get("matched_skills", [])
+            })
+
+    leaderboard.sort(key=lambda x: x["total_score"], reverse=True)
+
+    return {
+        "status": "success", 
+        "total_scanned": len(candidates),
+        "total_matched": len(leaderboard),
+        "leaderboard": leaderboard
+    }

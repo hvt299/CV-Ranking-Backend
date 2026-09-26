@@ -1,7 +1,8 @@
 from pydantic import BaseModel, Field
-from typing import Optional, Dict
+from typing import Optional, List
 from datetime import datetime
-from app.schemas.common_schema import utc_now, AlertFrequency
+from app.schemas.common_schema import utc_now
+from app.schemas.user_interaction_schema import RemoteFlexibilityEnum
 
 class CompanyReviewDB(BaseModel):
     id: str
@@ -18,10 +19,32 @@ class SavedJobDB(BaseModel):
     job_id: str = Field(...)
     created_at: datetime = Field(default_factory=utc_now)
 
-class JobAlertDB(BaseModel):
+class SavedCompanyDB(BaseModel):
     id: str
-    user_id: str = Field(...)
-    search_criteria: Dict = Field(..., description="VD: {'keyword': 'React', 'location': 'HCM', 'salary_min': 1000}")
-    frequency: AlertFrequency = Field(default=AlertFrequency.WEEKLY)
+    company_id: str = Field(...)
+    applicant_user_id: str = Field(...)
+    created_at: datetime = Field(default_factory=utc_now)
+
+class TalentPoolDB(BaseModel):
+    id: str
+    applicant_user_id: str = Field(...)
+    hr_user_id: str = Field(..., description="HR đã lưu ứng viên này")
+    company_id: str = Field(...)
+    notes: Optional[str] = None
+    tags: List[str] = Field(default=[])
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+class MatchingPreferencesDB(BaseModel):
+    id: str
+    applicant_user_id: str = Field(...)
+    expected_salary_min: Optional[int] = None
+    expected_salary_max: Optional[int] = None
+    currency: str = Field("VND")
+    remote_flexibility: RemoteFlexibilityEnum = Field(default=RemoteFlexibilityEnum.ANY)
+    preferred_industries: List[str] = Field(default=[])
+    preferred_locations: List[str] = Field(default=[])
+    strictly_avoided_keywords: List[str] = Field(default=[])
     is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)

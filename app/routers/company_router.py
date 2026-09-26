@@ -7,14 +7,18 @@ import jwt
 
 from app.core.security import CurrentUser, require_hr, JWT_SECRET, ALGORITHM
 from app.schemas.common_schema import CompanyStatus, UserRole
-from app.schemas.company_schema import CompanyResponse
+from app.schemas.company_schema import CompanyResponse, InviteMemberPayload,  DepartmentCreate, DepartmentUpdate, DepartmentResponse, AssignMemberPayload
 from app.schemas.shared_schema import LocationDetail
 from app.services.email_service import send_hr_invite_email
 from app.services.analytics_service import AnalyticsService
 from app.repositories.user_repository import UserRepository
 from app.repositories.company_repository import CompanyRepository
+from app.repositories.department_repository import DepartmentRepository
+from app.repositories.administrative_unit_repository import AdministrativeUnitRepository
 import re
-from app.database.config import get_db, Collections
+from app.middleware.subscription import require_tier
+from app.middleware.rate_limit import limiter
+from fastapi import Request, Response
 from pydantic import ValidationError
 from bson import ObjectId
 
@@ -24,13 +28,11 @@ async def parse_address_heuristic(raw_address: str) -> dict:
     if not raw_address:
         return None
         
-    db = get_db()
-    
     address_clean = re.sub(r'[,.\-]', ' ', raw_address.lower())
     address_clean = re.sub(r'\s+', ' ', address_clean)
     address_clean = f" {address_clean} "
     
-    provinces = await db[Collections.ADMINISTRATIVE_UNITS].find({"level": "province"}).to_list(100)
+    provinces = await AdministrativeUnitRepository.find_many({"level": "province"}, limit=100)
     provinces.sort(key=lambda x: len(x['name']), reverse=True)
     
     matched_province = None
@@ -45,11 +47,11 @@ async def parse_address_heuristic(raw_address: str) -> dict:
 
     prov_code = matched_province["code"]
     
-    new_wards = await db[Collections.ADMINISTRATIVE_UNITS].find({
+    new_wards = await AdministrativeUnitRepository.find_many({
         "parent_code": prov_code, 
         "level": "ward", 
         "version": "new"
-    }).to_list(1000)
+    }, limit=1000)
     
     if new_wards:
         new_wards.sort(key=lambda x: len(x['name']), reverse=True)
@@ -68,11 +70,11 @@ async def parse_address_heuristic(raw_address: str) -> dict:
                     "street_address": raw_address
                 }
 
-    old_districts = await db[Collections.ADMINISTRATIVE_UNITS].find({
+    old_districts = await AdministrativeUnitRepository.find_many({
         "parent_code": prov_code,
         "level": "district",
         "version": "old"
-    }).to_list(100)
+    }, limit=100)
     old_districts.sort(key=lambda x: len(x['name']), reverse=True)
     
     matched_district = None
@@ -84,11 +86,11 @@ async def parse_address_heuristic(raw_address: str) -> dict:
             
     matched_ward = None
     if matched_district:
-        old_wards = await db[Collections.ADMINISTRATIVE_UNITS].find({
+        old_wards = await AdministrativeUnitRepository.find_many({
             "parent_code": matched_district["code"],
             "level": "ward",
             "version": "old"
-        }).to_list(1000)
+        }, limit=1000)
         old_wards.sort(key=lambda x: len(x['name']), reverse=True)
         for w in old_wards:
             clean_w_name = re.sub(r'^(phường|xã|thị trấn)\s+', '', w['name'], flags=re.IGNORECASE).strip().lower()
@@ -122,7 +124,8 @@ async def parse_address_heuristic(raw_address: str) -> dict:
     }
 
 @router.get("/lookup-tax/{tax_code}")
-async def lookup_tax_code(tax_code: str):
+@limiter.limit("10/minute")
+async def lookup_tax_code(request: Request, response: Response, tax_code: str):
     url = f"https://api.vietqr.io/v2/business/{tax_code}"
     
     try:
@@ -155,22 +158,17 @@ async def lookup_tax_code(tax_code: str):
 async def get_company_members(current_user: CurrentUser = Depends(require_hr)):
     projection = {"hashed_password": 0, "reset_password_token": 0, "reset_password_expires": 0}
     members = await UserRepository.find_many({"company_id": current_user.company_id}, projection=projection, limit=100)
-    
-    result = []
-    for m in members:
-        m["id"] = str(m["_id"])
-        del m["_id"]
-        result.append(m)
-    return result
+    return members
 
 @router.get("/settings", dependencies=[Depends(require_hr)])
 async def get_company_settings(current_user: CurrentUser = Depends(require_hr)):
     company = await CompanyRepository.get_by_id(current_user.company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Không tìm thấy dữ liệu công ty")
-    
-    company["id"] = str(company["_id"])
-    del company["_id"]
+        
+    if "current_plan_id" in company and company["current_plan_id"] is not None:
+        company["current_plan_id"] = str(company["current_plan_id"])
+        
     return company
 
 @router.patch("/settings", dependencies=[Depends(require_hr)])
@@ -181,24 +179,43 @@ async def update_company_settings(
     if current_user.role != UserRole.HR_OWNER.value:
         raise HTTPException(status_code=403, detail="Chỉ HR Owner mới được phép cập nhật thông tin công ty")
 
+    current_company = await CompanyRepository.get_by_id(current_user.company_id)
+    if not current_company:
+        raise HTTPException(status_code=404, detail="Không tìm thấy dữ liệu công ty")
+        
+    if current_company.get("owner_user_id") and str(current_company.get("owner_user_id")) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Từ chối truy cập: Chỉ người tạo (Owner gốc) mới được quyền sửa thông tin công ty.")
+
     update_data = {"updated_at": datetime.now(timezone.utc)}
 
-    allowed_fields = ["tax_code", "industry", "size", "website", "address", 
-                       "license_file_url", "name", "logo_url", "banner_url", "location"]
-    for field in allowed_fields:
-        if field in payload:
-            update_data[field] = payload[field]
+    # Gỡ bỏ "industry", giữ lại các trường chuỗi khác
+    allowed_string_fields = ["tax_code", "size", "website", "address", "license_file_url", "name", "logo_url", "banner_url", "description"]
+    for field in allowed_string_fields:
+        if field in payload and payload[field] is not None:
+            update_data[field] = str(payload[field]).strip()
 
-    if "location" in update_data:
+    # Xử lý đa ngành nghề (tối đa 3)
+    if "industries" in payload and isinstance(payload["industries"], list):
+        update_data["industries"] = payload["industries"][:3]
+
+    # Xử lý các trường mảng và object mới
+    if "gallery_urls" in payload and isinstance(payload["gallery_urls"], list):
+        update_data["gallery_urls"] = payload["gallery_urls"][:5] # Tối đa 5 ảnh
+        
+    if "benefits" in payload and isinstance(payload["benefits"], list):
+        update_data["benefits"] = payload["benefits"]
+
+    if "social_links" in payload and isinstance(payload["social_links"], dict):
+        update_data["social_links"] = payload["social_links"]
+
+    if "location" in payload and payload["location"] is not None:
         try:
-            update_data["location"] = LocationDetail(**update_data["location"]).model_dump()
+            update_data["location"] = LocationDetail(**payload["location"]).model_dump()
         except ValidationError as e:
             raise HTTPException(status_code=422, detail=f"Dữ liệu địa điểm không hợp lệ: {e}")
 
-    current_company = await CompanyRepository.get_by_id(current_user.company_id)
-
-    tax_code_changed = "tax_code" in payload and payload["tax_code"] != current_company.get("tax_code")
-    license_changed = "license_file_url" in payload and payload["license_file_url"] != current_company.get("license_file_url")
+    tax_code_changed = "tax_code" in update_data and update_data["tax_code"] != current_company.get("tax_code")
+    license_changed = "license_file_url" in update_data and update_data["license_file_url"] != current_company.get("license_file_url")
 
     if tax_code_changed or license_changed:
         update_data["status"] = CompanyStatus.PENDING_VERIFICATION.value
@@ -211,26 +228,43 @@ async def update_company_settings(
     }
 
 @router.post("/invite", dependencies=[Depends(require_hr)])
+@limiter.limit("20/day")
 async def invite_hr_member(
+    request: Request,
+    response: Response,
     background_tasks: BackgroundTasks,
-    email: str = Body(..., embed=True), 
+    payload: InviteMemberPayload = Body(...), 
     current_user: CurrentUser = Depends(require_hr)
 ):
     if current_user.role != UserRole.HR_OWNER.value:
         raise HTTPException(status_code=403, detail="Chỉ HR Owner mới có quyền mời thành viên")
         
     company = await CompanyRepository.get_by_id(current_user.company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail="Không tìm thấy dữ liệu công ty")
+
+    if company.get("owner_user_id") and str(company.get("owner_user_id")) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Từ chối truy cập: Chỉ người tạo (Owner gốc) mới được quyền mời thành viên.")
+
+    if payload.department_id:
+        dept = await DepartmentRepository.get_by_id(payload.department_id)
+        if not dept or dept.get("company_id") != current_user.company_id:
+            raise HTTPException(status_code=400, detail="Phòng ban không tồn tại hoặc không thuộc công ty này")
+        
     user = await UserRepository.get_by_id(current_user.id)
     
-    existing_user = await UserRepository.find_one({"email": email})
+    safe_email = str(payload.email).strip()
+    existing_user = await UserRepository.find_one({"email": safe_email})
     if existing_user:
         raise HTTPException(status_code=400, detail="Email này đã có tài khoản trên hệ thống")
         
     invite_token = jwt.encode(
         {
-            "email": email, 
+            "email": safe_email, 
             "company_id": current_user.company_id, 
             "role": UserRole.HR_MEMBER.value,
+            "department_id": payload.department_id,
+            "department_roles": payload.department_roles,
             "exp": datetime.now(timezone.utc) + timedelta(days=7)
         },
         JWT_SECRET, algorithm=ALGORITHM
@@ -238,23 +272,23 @@ async def invite_hr_member(
     
     send_hr_invite_email(
         background_tasks, 
-        to=email, 
+        to=safe_email, 
         inviter_name=user.get("full_name", "Quản lý"), 
         company_name=company.get("name", "Công ty"), 
         token=invite_token
     )
     
-    return {"status": "success", "message": f"Đã gửi thư mời thành công đến {email}"}
+    return {"status": "success", "message": f"Đã gửi thư mời thành công đến {safe_email}"}
 
-@router.get("/{company_id}/analytics", dependencies=[Depends(require_hr)])
-async def get_company_analytics(company_id: str, current_user: CurrentUser = Depends(require_hr)):
+@router.get("/{company_id}/analytics")
+async def get_company_analytics(company_id: str, days: int = 30, current_user: CurrentUser = Depends(require_hr)):
     if current_user.role != UserRole.HR_OWNER.value or current_user.company_id != company_id:
         raise HTTPException(
             status_code=403, 
             detail="Bạn không có quyền xem dữ liệu phân tích của công ty này"
         )
     
-    result = await AnalyticsService.get_company_pro_analytics(company_id)
+    result = await AnalyticsService.get_company_pro_analytics(company_id, days)
     
     result["status"] = "success"
     return result
@@ -271,7 +305,11 @@ async def get_public_companies():
     
     result = []
     for comp in companies:
-        comp["id"] = str(comp["_id"])
+        comp["id"] = comp.get("id") or str(comp.pop("_id", ""))
+        
+        if "current_plan_id" in comp and comp["current_plan_id"] is not None:
+            comp["current_plan_id"] = str(comp["current_plan_id"])
+            
         result.append(comp)
         
     return result
@@ -286,11 +324,153 @@ async def get_public_company_detail(company_id: str):
     company = await CompanyRepository.find_one({"_id": obj_id, "status": CompanyStatus.VERIFIED.value})
     if not company:
         raise HTTPException(status_code=404, detail="Không tìm thấy công ty hoặc công ty chưa được xác thực")
-        
-    company["id"] = str(company["_id"])
     
     current_views = company.get("view_count", 0)
-    await CompanyRepository.update(company_id, {"view_count": current_views + 1})
+    current_profile_views = company.get("profile_view_count", 0)
+    
+    await CompanyRepository.update_custom(
+        {"_id": obj_id},
+        {"$inc": {"view_count": 1, "profile_view_count": 1}}
+    )
+    
     company["view_count"] = current_views + 1
+    company["profile_view_count"] = current_profile_views + 1
+    
+    if "current_plan_id" in company and company["current_plan_id"] is not None:
+        company["current_plan_id"] = str(company["current_plan_id"])
     
     return company
+
+@router.post("/departments", response_model=DepartmentResponse, dependencies=[Depends(require_hr)])
+async def create_department(
+    payload: DepartmentCreate, 
+    current_user: CurrentUser = Depends(require_hr)
+):
+    if current_user.role != UserRole.HR_OWNER.value:
+        raise HTTPException(status_code=403, detail="Chỉ HR Owner mới được tạo phòng ban")
+    
+    record = payload.model_dump()
+    record["company_id"] = current_user.company_id
+    record["created_at"] = datetime.now(timezone.utc)
+    record["updated_at"] = datetime.now(timezone.utc)
+    
+    _id = await DepartmentRepository.create(record)
+    record["id"] = _id
+    return record
+
+@router.get("/departments", response_model=List[DepartmentResponse], dependencies=[Depends(require_hr)])
+async def get_departments(current_user: CurrentUser = Depends(require_hr)):
+    depts = await DepartmentRepository.get_by_company_id(current_user.company_id)
+    return depts
+
+@router.patch("/departments/{dept_id}", dependencies=[Depends(require_hr)])
+async def update_department(
+    dept_id: str,
+    payload: DepartmentUpdate,
+    current_user: CurrentUser = Depends(require_hr)
+):
+    if current_user.role != UserRole.HR_OWNER.value:
+        raise HTTPException(status_code=403, detail="Chỉ HR Owner mới được sửa thông tin phòng ban")
+    
+    dept = await DepartmentRepository.get_by_id(dept_id)
+    if not dept or dept.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy phòng ban hợp lệ")
+        
+    update_data = payload.model_dump(exclude_unset=True)
+    if not update_data:
+        return {"status": "success", "message": "Không có dữ liệu mới để cập nhật"}
+        
+    update_data["updated_at"] = datetime.now(timezone.utc)
+    await DepartmentRepository.update(dept_id, update_data)
+    return {"status": "success", "message": "Đã cập nhật thông tin phòng ban"}
+
+@router.delete("/departments/{dept_id}", dependencies=[Depends(require_hr)])
+async def delete_department(dept_id: str, current_user: CurrentUser = Depends(require_hr)):
+    if current_user.role != UserRole.HR_OWNER.value:
+        raise HTTPException(status_code=403, detail="Chỉ HR Owner mới được xóa phòng ban")
+    
+    dept = await DepartmentRepository.get_by_id(dept_id)
+    if not dept or dept.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy phòng ban hợp lệ")
+        
+    await DepartmentRepository.delete(dept_id)
+    
+    await UserRepository.update_many(
+        {"department_id": dept_id},
+        {"department_id": None, "department_roles": []}
+    )
+    
+    return {"status": "success", "message": "Đã xóa phòng ban và gỡ phân bổ các nhân sự liên quan"}
+
+@router.patch("/members/{user_id}/department", dependencies=[Depends(require_hr)])
+async def assign_member_to_department(
+    user_id: str,
+    payload: AssignMemberPayload,
+    current_user: CurrentUser = Depends(require_hr)
+):
+    if current_user.role != UserRole.HR_OWNER.value:
+        raise HTTPException(status_code=403, detail="Chỉ HR Owner mới được phân bổ nhân sự")
+    
+    target_user = await UserRepository.get_by_id(user_id)
+    if not target_user or target_user.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy nhân sự trong công ty")
+
+    if payload.department_id:
+        dept = await DepartmentRepository.get_by_id(payload.department_id)
+        if not dept or dept.get("company_id") != current_user.company_id:
+            raise HTTPException(status_code=404, detail="Phòng ban không tồn tại hoặc không thuộc công ty này")
+
+    await UserRepository.update(user_id, {
+        "department_id": payload.department_id,
+        "department_roles": payload.department_roles,
+        "updated_at": datetime.now(timezone.utc)
+    })
+
+    return {"status": "success", "message": "Đã cập nhật phân bổ phòng ban cho nhân sự"}
+from pydantic import BaseModel
+
+class RoleUpdateRequest(BaseModel):
+    role: str
+
+@router.patch("/members/{user_id}/role")
+async def update_member_role(
+    user_id: str,
+    payload: RoleUpdateRequest,
+    current_user: CurrentUser = Depends(require_hr)
+):
+    if current_user.role != UserRole.HR_OWNER.value:
+        raise HTTPException(status_code=403, detail="Chỉ Owner mới có quyền thay đổi vai trò thành viên")
+        
+    if current_user.id == user_id:
+        raise HTTPException(status_code=400, detail="Không thể tự thay đổi vai trò của chính mình")
+        
+    target_user = await UserRepository.get_by_id(user_id)
+    if not target_user or target_user.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy thành viên trong công ty")
+        
+    if payload.role not in [UserRole.HR_OWNER.value, UserRole.HR_MEMBER.value]:
+        raise HTTPException(status_code=400, detail="Vai trò không hợp lệ")
+        
+    await UserRepository.update_by_query({"_id": ObjectId(user_id)}, {"$set": {"role": payload.role}})
+    return {"status": "success", "message": "Đã cập nhật vai trò thành công"}
+
+@router.delete("/members/{user_id}")
+async def remove_member(
+    user_id: str,
+    current_user: CurrentUser = Depends(require_hr)
+):
+    if current_user.role != UserRole.HR_OWNER.value:
+        raise HTTPException(status_code=403, detail="Chỉ Owner mới có quyền xóa thành viên")
+        
+    if current_user.id == user_id:
+        raise HTTPException(status_code=400, detail="Không thể tự xóa chính mình khỏi công ty")
+        
+    target_user = await UserRepository.get_by_id(user_id)
+    if not target_user or target_user.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy thành viên trong công ty")
+        
+    await UserRepository.update_by_query(
+        {"_id": ObjectId(user_id)}, 
+        {"$set": {"company_id": None, "role": UserRole.USER.value}}
+    )
+    return {"status": "success", "message": "Đã xóa thành viên khỏi công ty"}

@@ -4,14 +4,94 @@ import re
 
 from app.repositories.administrative_unit_repository import AdministrativeUnitRepository
 from app.repositories.skill_repository import SkillRepository
+from app.repositories.language_repository import LanguageRepository
+from app.repositories.certification_repository import CertificationRepository
 from app.schemas.common_schema import AdminLevel, UserRole, CompanyStatus, JobStatus, ApplicationStatus
 
 from app.repositories.user_repository import UserRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.job_repository import JobRepository
 from app.repositories.application_repository import ApplicationRepository
+from app.repositories.report_repository import ReportRepository
+from app.repositories.support_ticket_repository import SupportTicketRepository
+from app.repositories.blog_repository import BlogRepository
+from app.schemas.report_schema import ReportCreate
+from app.schemas.support_ticket_schema import SupportTicketCreate
+from app.schemas.common_schema import TicketStatus
+from fastapi import HTTPException
+from datetime import datetime, timezone
+
+from app.services.nlp_engine import GLOBAL_SYSTEM_SETTINGS
 
 router = APIRouter(prefix="/api/v1/system", tags=["System & Master Data"])
+
+@router.post("/reports")
+async def submit_report(payload: ReportCreate):
+    record = payload.model_dump()
+    record["created_at"] = datetime.now(timezone.utc)
+    record["updated_at"] = datetime.now(timezone.utc)
+    
+    _id = await ReportRepository.create(record)
+    return {"status": "success", "message": "Cảm ơn bạn đã báo cáo. Chúng tôi sẽ xem xét và xử lý sớm nhất có thể."}
+
+from app.core.security import get_current_user_optional, CurrentUser
+from fastapi import Depends
+import uuid
+
+@router.post("/support-tickets")
+async def submit_support_ticket(
+    payload: SupportTicketCreate,
+    current_user: Optional[CurrentUser] = Depends(get_current_user_optional)
+):
+    record = payload.model_dump()
+    
+    # If user is authenticated, override user_id to prevent frontend spoofing
+    if current_user:
+        record["user_id"] = current_user.id
+        
+    record["status"] = TicketStatus.OPEN.value
+    record["created_at"] = datetime.now(timezone.utc)
+    record["updated_at"] = datetime.now(timezone.utc)
+    
+    # Generate unique ticket number: ATS-{timestamp}-{random_hex}
+    timestamp_hex = hex(int(datetime.now().timestamp()))[2:].upper()
+    random_hex = str(uuid.uuid4())[:4].upper()
+    record["ticket_number"] = f"ATS-{timestamp_hex}-{random_hex}"
+    
+    _id = await SupportTicketRepository.create(record)
+    return {
+        "status": "success", 
+        "message": "Gửi yêu cầu hỗ trợ thành công. Chúng tôi sẽ phản hồi qua email của bạn sớm nhất.",
+        "data": {
+            "ticket_number": record["ticket_number"]
+        }
+    }
+
+@router.get("/blogs")
+async def get_public_blogs(
+    category: Optional[str] = Query(None, description="Lọc theo danh mục"),
+    limit: int = Query(10, ge=1, le=50)
+):
+    query = {"is_published": True}
+    if category and category != "all":
+        query["category"] = category
+        
+    blogs = await BlogRepository.find_many(query, sort=[("created_at", -1)], limit=limit)
+    return {"status": "success", "data": blogs}
+
+@router.get("/blogs/{slug}")
+async def get_blog_detail(slug: str):
+    blog = await BlogRepository.find_one({"slug": slug, "is_published": True})
+    if not blog:
+        raise HTTPException(status_code=404, detail="Bài viết không tồn tại hoặc đã bị ẩn")
+        
+    await BlogRepository.update_custom(
+        {"_id": blog.get("id")},
+        {"$inc": {"view_count": 1}}
+    )
+    
+    blog["view_count"] = blog.get("view_count", 0) + 1
+    return {"status": "success", "data": blog}
 
 @router.get("/locations")
 async def get_locations():
@@ -21,7 +101,7 @@ async def get_locations():
     result = []
     for loc in locations:
         result.append({
-            "id": str(loc["_id"]),
+            "id": loc.get("id"),
             "code": loc.get("code"),
             "name": loc.get("name"),
             "version": loc.get("version", "old")
@@ -30,10 +110,41 @@ async def get_locations():
     result.sort(key=lambda x: x.get("name", ""))
     return result
 
+@router.get("/languages")
+async def search_languages(q: Optional[str] = Query(None), limit: int = Query(50)):
+    query = {}
+    if q and q.strip():
+        regex_pattern = re.compile(f".*{re.escape(q.strip())}.*", re.IGNORECASE)
+        query["$or"] = [
+            {"canonical_name": regex_pattern},
+            {"aliases": regex_pattern}
+        ]
+    docs = await LanguageRepository.find_many(query, limit=limit)
+    result = []
+    for d in docs:
+        result.append(d)
+    return result
+
+@router.get("/certifications")
+async def search_certifications(q: Optional[str] = Query(None), limit: int = Query(50)):
+    query = {}
+    if q and q.strip():
+        regex_pattern = re.compile(f".*{re.escape(q.strip())}.*", re.IGNORECASE)
+        query["$or"] = [
+            {"canonical_name": regex_pattern},
+            {"aliases": regex_pattern}
+        ]
+    docs = await CertificationRepository.find_many(query, limit=limit)
+    result = []
+    for d in docs:
+        result.append(d)
+    return result
+
 @router.get("/skills")
 async def search_skills(
     q: Optional[str] = Query(None, description="Từ khóa tìm kiếm kỹ năng"),
-    industry: Optional[str] = Query(None, description="Lọc theo ngành nghề (Cross-filtering)")
+    industry: Optional[str] = Query(None, description="Lọc theo ngành nghề (Cross-filtering)"),
+    limit: int = Query(50, description="Giới hạn số kết quả")
 ):
     query = {}
     conditions = []
@@ -53,15 +164,8 @@ async def search_skills(
     if conditions:
         query["$and"] = conditions
         
-    skills = await SkillRepository.find_many(query, limit=50)
-    
-    result = []
-    for sk in skills:
-        sk["id"] = str(sk["_id"])
-        del sk["_id"]
-        result.append(sk)
-        
-    return result
+    skills = await SkillRepository.find_many(query, limit=limit)
+    return skills
 
 @router.get("/locations/{parent_code}/children")
 async def get_sub_locations(parent_code: str):
@@ -71,7 +175,7 @@ async def get_sub_locations(parent_code: str):
     result = []
     for loc in locations:
         result.append({
-            "id": str(loc["_id"]),
+            "id": loc.get("id"),
             "code": loc.get("code"),
             "name": loc.get("name"),
             "parent_code": loc.get("parent_code"),
@@ -110,3 +214,8 @@ async def get_system_statistics():
         "total_jobs": total_jobs,
         "success_rate": success_rate
     }
+
+@router.get("/config/industry-weights")
+async def get_industry_weights():
+    weights = GLOBAL_SYSTEM_SETTINGS.get("industry_weights", {})
+    return {"status": "success", "data": weights}

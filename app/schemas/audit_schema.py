@@ -9,6 +9,13 @@ class TargetEntityType(str, Enum):
     JOB = "job"
     USER = "user"
     DEPARTMENT = "department"
+    SUBSCRIPTION_PLAN = "subscription_plan"
+    SYSTEM_SETTINGS = "system_settings"
+    SKILL = "skill"
+    ADMINISTRATIVE_UNIT = "administrative_unit"
+    REPORT = "report"
+    SUPPORT_TICKET = "support_ticket"
+    BLOG_POST = "blog_post"
 
 class AuditLogCreate(BaseModel):
     actor_id: str
