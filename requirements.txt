@@ -26,11 +26,20 @@ pymupdf
 python-docx
 pdfplumber
 numpy==1.26.4
+unidecode
+
+# --- Data Processing & Web Parsing ---
+pandas
+beautifulsoup4
 
 # --- Rate Limiting & Caching ---
 slowapi
 hiredis
 redis
+qstash
+
+# --- Schedulers & Background Tasks ---
+apscheduler
 
 # --- Cloud Storage ---
 cloudinary==1.38.0

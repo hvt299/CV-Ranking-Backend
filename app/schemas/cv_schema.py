@@ -23,6 +23,8 @@ class CandidateInfo(BaseModel):
     education_level: str = Field(default="Không đề cập")
     years_of_experience: float = Field(default=0.0)
     skill_experience: Dict[str, float] = Field(default_factory=dict)
+    languages: List[str] = Field(default=[])
+    certifications: List[str] = Field(default=[])
     job_hops: int = Field(default=1)
     gap_months: int = Field(default=0)
     fraud_analysis: Optional[Dict] = None

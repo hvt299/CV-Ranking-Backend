@@ -1,87 +1,121 @@
 from fastapi import Depends, HTTPException
 from datetime import datetime, timezone
+from bson import ObjectId
 
 from app.core.security import require_hr, CurrentUser
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.subscription_plan_repository import SubscriptionPlanRepository
-from app.repositories.job_repository import JobRepository
-from app.repositories.cv_repository import CVRepository
+from app.repositories.quota_transaction_repository import QuotaTransactionRepository
 
-async def _get_company_plan_limits(company_id: str) -> dict:
-    """Helper: Lấy giới hạn gói cước hiện tại của công ty"""
-    if not company_id:
-        raise HTTPException(status_code=403, detail="Tài khoản chưa được liên kết với công ty nào.")
-
+async def get_company_plan_features(company_id: str) -> dict:
     company = await CompanyRepository.get_by_id(company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Không tìm thấy dữ liệu công ty.")
-
-    # Kiểm tra hạn sử dụng (expires_at)
-    expires_at = company.get("subscription_expires_at")
-    if expires_at:
-        # Xử lý datetime để so sánh
-        if isinstance(expires_at, str):
-            expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-            
-        if datetime.now(timezone.utc) > expires_at:
-            raise HTTPException(
-                status_code=403, 
-                detail="Gói cước của công ty đã hết hạn. Vui lòng gia hạn để tiếp tục sử dụng."
-            )
-
+        
     plan_id = company.get("current_plan_id")
-    if not plan_id:
-        # Nếu chưa có plan_id, áp dụng giới hạn của gói FREE mặc định
-        return {"max_jobs_per_month": 3, "max_cv_parses_per_month": 50}
+    period_end = company.get("current_period_end")
+    
+    if period_end:
+        if isinstance(period_end, str):
+            period_end = datetime.fromisoformat(period_end.replace("Z", "+00:00"))
+        if period_end.tzinfo is None:
+            period_end = period_end.replace(tzinfo=timezone.utc)
+            
+        if datetime.now(timezone.utc) > period_end:
+            await CompanyRepository.update_custom(
+                {"_id": ObjectId(company_id)},
+                {
+                    "$set": {
+                        "current_plan_id": None, 
+                        "credits_remaining": 0, 
+                        "current_period_start": None,
+                        "current_period_end": None
+                    }
+                }
+            )
+            
+            if company.get("credits_remaining", 0) > 0:
+                await QuotaTransactionRepository.create({
+                    "company_id": company_id,
+                    "user_id": "system",
+                    "action_type": "EXPIRED_CREDIT_RECOVERY",
+                    "credit_cost": company.get("credits_remaining"),
+                    "balance_after": 0,
+                    "created_at": datetime.now(timezone.utc)
+                })
+                
+            plan_id = None
 
+    if not plan_id:
+        free_plan = await SubscriptionPlanRepository.find_one({"plan_code": "hr_free", "is_active": True})
+        if free_plan:
+            return free_plan.get("features", {})
+            
+        # Fallback cuối cùng phòng hờ DB bị xóa nhầm gói hr_free
+        return {
+            "max_active_jobs": 1,
+            "max_job_edits": 5,
+            "max_rescores_per_job": 2,
+            "monthly_ai_credits": 0,
+            "max_cv_parses_per_month": 20,
+            "can_use_reverse_matching": False, 
+            "can_set_hot_job": False,
+            "can_export_analytics": False,
+            "can_customize_ai_weights": False
+        }
+        
     plan = await SubscriptionPlanRepository.get_by_id(plan_id)
     if not plan:
-        return {"max_jobs_per_month": 3, "max_cv_parses_per_month": 50}
-
-    return {
-        "max_jobs_per_month": plan.get("max_jobs_per_month", 3),
-        "max_cv_parses_per_month": plan.get("max_cv_parses_per_month", 50)
-    }
-
-async def verify_job_quota(current_user: CurrentUser = Depends(require_hr)) -> CurrentUser:
-    """Middleware: Chặn tạo Job nếu vượt quá giới hạn tháng"""
-    limits = await _get_company_plan_limits(current_user.company_id)
-    
-    # Tính số lượng Job đã tạo trong tháng hiện tại
-    now = datetime.now(timezone.utc)
-    start_of_month = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-    
-    job_count = await JobRepository.count_documents({
-        "company_id": current_user.company_id,
-        "created_at": {"$gte": start_of_month}
-    })
-
-    if job_count >= limits["max_jobs_per_month"]:
-        raise HTTPException(
-            status_code=403, 
-            detail=f"Công ty đã đạt giới hạn tạo {limits['max_jobs_per_month']} chiến dịch trong tháng này. Vui lòng nâng cấp gói cước."
-        )
+        free_plan = await SubscriptionPlanRepository.find_one({"plan_code": "hr_free", "is_active": True})
+        return free_plan.get("features", {}) if free_plan else {}
         
-    return current_user
+    return plan.get("features", {})
 
-async def verify_cv_quota(current_user: CurrentUser = Depends(require_hr)) -> CurrentUser:
-    """Middleware: Chặn Upload/Parse CV AI nếu vượt quá giới hạn tháng"""
-    limits = await _get_company_plan_limits(current_user.company_id)
-    
-    now = datetime.now(timezone.utc)
-    start_of_month = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-    
-    cv_count = await CVRepository.count_documents({
-        "company_id": current_user.company_id,
-        "created_at": {"$gte": start_of_month}
-    })
 
-    if cv_count >= limits["max_cv_parses_per_month"]:
-        raise HTTPException(
-            status_code=403, 
-            detail=f"Công ty đã đạt giới hạn phân tích {limits['max_cv_parses_per_month']} CV bằng AI trong tháng này. Vui lòng nâng cấp gói cước."
-        )
+def require_tier(feature_key: str):
+    async def dependency(current_user: CurrentUser = Depends(require_hr)):
+        features = await get_company_plan_features(current_user.company_id)
+        if not features.get(feature_key, False):
+            raise HTTPException(
+                status_code=403, 
+                detail=f"Gói cước hiện tại không hỗ trợ tính năng này. Vui lòng nâng cấp (Upsell)."
+            )
+        return current_user
+    return dependency
+
+
+def require_credits(action_type: str):
+    async def dependency(current_user: CurrentUser = Depends(require_hr)):
+        from app.services.nlp_engine import GLOBAL_SYSTEM_SETTINGS
         
-    return current_user
+        # Bắt buộc đọc từ DB/Memory
+        actual_cost = GLOBAL_SYSTEM_SETTINGS.get("action_costs", {}).get(action_type)
+        if actual_cost is None:
+            raise HTTPException(
+                status_code=503, 
+                detail=f"Hệ thống đang thiếu cấu hình bảng giá cho '{action_type}'. Chưa thể thực hiện lúc này."
+            )
+
+        # Trạm gác thông minh: Nếu miễn phí (cost = 0), cho qua luôn không cần đụng DB
+        if actual_cost == 0:
+            return current_user
+
+        success = await CompanyRepository.deduct_ai_credits(current_user.company_id, actual_cost)
+        if not success:
+            raise HTTPException(
+                status_code=402, 
+                detail=f"Tài khoản không đủ Credit AI (cần {actual_cost} credits cho {action_type}). Vui lòng nạp thêm."
+            )
+            
+        company = await CompanyRepository.get_by_id(current_user.company_id)
+        await QuotaTransactionRepository.create({
+            "company_id": current_user.company_id,
+            "user_id": current_user.id,
+            "action_type": action_type,
+            "credit_cost": actual_cost,
+            "balance_after": company.get("credits_remaining", 0),
+            "created_at": datetime.now(timezone.utc)
+        })
+        
+        return current_user
+    return dependency
