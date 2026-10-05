@@ -1,7 +1,7 @@
 industry,category,skill_name,alias1,alias2,alias3,alias4
-TaiXe,Van tai,tai xe lai xe chuyen dung,specialized vehicle driver,,,
-TaiXe,Dua don,tai xe lai xe thue,rental hired driver,,,
-TaiXe,Dua don,dich vu dua don khac,other pickup drop-off service,,,
-TaiXe,Dua don,dich vu dua don san bay,airport transfer service,,,
-TaiXe,Dua don,dich vu dua don hoc sinh,school pickup service,,,
-TaiXe,Dua don,tai xe xe bus,public bus driver,,,
+Driver,Vận tải,tài xế lái xe chuyên dụng,specialized vehicle driver,,,
+Driver,Đưa đón,tài xế lái xe thuê,rental hired driver,,,
+Driver,Đưa đón,dịch vụ đưa đón khác,other pickup drop-off service,,,
+Driver,Đưa đón,dịch vụ đưa đón sân bay,airport transfer service,,,
+Driver,Đưa đón,dịch vụ đưa đón học sinh,school pickup service,,,
+Driver,Đưa đón,tài xế xe buýt,public bus driver,,,
