@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Query
 from typing import Optional
 import re
+from bson import ObjectId
 
 from app.repositories.administrative_unit_repository import AdministrativeUnitRepository
 from app.repositories.skill_repository import SkillRepository
@@ -70,7 +71,7 @@ async def submit_support_ticket(
 @router.get("/blogs")
 async def get_public_blogs(
     category: Optional[str] = Query(None, description="Lọc theo danh mục"),
-    limit: int = Query(10, ge=1, le=50)
+    limit: int = Query(10, ge=1, le=200)
 ):
     query = {"is_published": True}
     if category and category != "all":
@@ -86,7 +87,7 @@ async def get_blog_detail(slug: str):
         raise HTTPException(status_code=404, detail="Bài viết không tồn tại hoặc đã bị ẩn")
         
     await BlogRepository.update_custom(
-        {"_id": blog.get("id")},
+        {"_id": ObjectId(blog["id"])},
         {"$inc": {"view_count": 1}}
     )
     
